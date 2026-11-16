@@ -32,12 +32,13 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install capture deps
-        run: pip install -r requirements-capture.txt
-      - name: Install rclone
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq rclone
-          # ffmpeg + streamlink CLI are installed via pip requirements above
+          # NOTE: ffmpeg is NOT preinstalled on current runner images
+          sudo apt-get install -y -qq ffmpeg rclone
+          pip install -r requirements-capture.txt
+          ffmpeg -version | head -1
+          streamlink --version | head -1
       - name: Cache Whisper model
         uses: actions/cache@v4
         with:
