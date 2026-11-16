@@ -1,0 +1,52 @@
+name: doctor
+run-name: doctor (platform reachability from runner IP)
+
+# Diagnoses what works from a GitHub runner's IP: which platforms can be
+# extracted, whether the Drive secret is present, and whether rclone can
+# actually reach Google Drive. Safe to run any time — it only reads.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install tools
+        run: |
+          pip install -q yt-dlp streamlink
+          sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+          ffmpeg -version | head -1
+
+      - name: Secret present?
+        run: |
+          if [ -n "${{ secrets.GDRIVE_RCLONE_CONF }}" ]; then
+            echo "GDRIVE_RCLONE_CONF: PRESENT (${#GDRIVE_RCLONE_CONF} chars)"
+          else
+            echo "GDRIVE_RCLONE_CONF: MISSING"
+          fi
+
+      - name: Drive reachable from runner?
+        run: |
+          mkdir -p ~/.config/rclone
+          if [ -n "${{ secrets.GDRIVE_RCLONE_CONF }}" ]; then
+            echo "${{ secrets.GDRIVE_RCLONE_CONF }}" | base64 -d > ~/.config/rclone/rclone.conf
+            rclone about gdrive: 2>&1 | head -6
+            rclone mkdir gdrive:StreamClips && echo "rclone can write to gdrive:StreamClips"
+          fi
+
+      - name: Platform reachability
+        run: |
+          echo "=== YOUTUBE (yt-dlp) ==="
+          yt-dlp -g -f "bv*+ba/b" --no-warnings "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -4
+          echo "=== TWITCH (streamlink) ==="
+          streamlink --json "https://twitch.tv/shroud" 2>&1 | tail -3
+          echo "=== KICK (yt-dlp) ==="
+          yt-dlp -g -f "bv*+ba/b" --no-warnings "https://kick.com/trainwreckstv" 2>&1 | tail -4
