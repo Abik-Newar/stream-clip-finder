@@ -64,6 +64,12 @@ def yt_dlp_urls(url):
     except subprocess.TimeoutExpired:
         return None
     if r.returncode != 0:
+        err = (r.stderr or "").strip().splitlines()
+        detail = err[-1][:200] if err else f"exit {r.returncode}"
+        if "Sign in to confirm" in detail or "not a bot" in detail:
+            detail += ("  → YouTube bot-check: this IP needs cookies. "
+                       "Set the YT_COOKIES secret (see README).")
+        print(f"[livecheck] yt-dlp could not extract {url}: {detail}")
         return None
     return [l for l in r.stdout.splitlines() if l.startswith("http")] or None
 

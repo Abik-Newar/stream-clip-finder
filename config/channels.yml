@@ -8,14 +8,22 @@
 # stop.yml) — agents never run unless the system is started.
 
 channels:
-  # --- test channel (24/7 live) — swap for your real channels later ------
-  - platform: youtube
-    name: "@LofiGirl"
+  # --- live test channels (verified live + extractable from runner IPs) ---
+  - platform: twitch
+    name: jynxzi
+    enabled: true
+  - platform: twitch
+    name: tarik
+    enabled: true
+  - platform: twitch
+    name: nightblue3
     enabled: true
 
   # - platform: twitch
   #   name: some_channel
   #   enabled: true
+  # - platform: youtube
+  #   name: "@handle"      # needs the YT_COOKIES secret (bot-check)
 
 options:
   # Clip geometry — clips are always strictly under 90 seconds
