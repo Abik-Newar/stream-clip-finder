@@ -1,0 +1,62 @@
+name: capture
+run-name: clip-capture-${{ inputs.platform }}-${{ inputs.channel }}
+
+# One capture job per live channel. `run-name` doubles as the marker the
+# monitor uses to avoid dispatching duplicates.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "twitch | kick | youtube"
+        required: true
+      channel:
+        description: "Channel name / handle"
+        required: true
+      threshold:
+        description: "Override threshold (e.g. -1 forces a test clip)"
+        required: false
+        default: ""
+
+concurrency:
+  group: clip-capture-${{ inputs.platform }}-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330 # stay under the 6h GitHub hard limit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install capture deps
+        run: pip install -r requirements-capture.txt
+      - name: Install rclone
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone
+          # ffmpeg + streamlink CLI are installed via pip requirements above
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-${{ runner.os }}-${{ vars.WHISPER_MODEL || 'base' }}
+      - name: Restore rclone config
+        run: |
+          mkdir -p ~/.config/rclone
+          if [ -n "${{ secrets.GDRIVE_RCLONE_CONF }}" ]; then
+            echo "${{ secrets.GDRIVE_RCLONE_CONF }}" | base64 -d > ~/.config/rclone/rclone.conf
+            chmod 600 ~/.config/rclone/rclone.conf
+          else
+            echo "WARNING: GDRIVE_RCLONE_CONF not set — clips will be kept locally only"
+          fi
+      - name: Capture stream
+        run: |
+          python -m streamclip.capture \
+            --platform "${{ inputs.platform }}" \
+            --channel "${{ inputs.channel }}"
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SCF_THRESHOLD: ${{ inputs.threshold }}

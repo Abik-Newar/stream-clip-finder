@@ -1,0 +1,31 @@
+name: start
+run-name: stream-clip ▶ START
+
+# One-click START: enables the scheduler and immediately checks channels.
+# Run from the Actions tab → "stream-clip ▶ START" → Run workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Turn the system on
+        run: |
+          gh workflow enable monitor.yml 2>/dev/null || true
+          gh variable set SCF_RUNNING --body "true" 2>/dev/null \
+            || echo "(variable set skipped — enable/disable still governs)"
+          sleep 3
+          if gh workflow run monitor.yml; then
+            echo "▶ SYSTEM ON — scheduler running; agents start for live channels"
+          else
+            echo "monitor dispatch failed — check repo Actions permissions"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

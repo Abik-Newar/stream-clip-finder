@@ -1,0 +1,33 @@
+name: monitor
+run-name: monitor
+
+# Checks every configured channel and dispatches a capture job for live ones.
+# GitHub's scheduler can drift by a few minutes; the capture job's concurrency
+# group prevents duplicate captures either way.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  check:
+    # Master switch: skipped entirely when the system is stopped
+    if: vars.SCF_RUNNING != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install monitor deps
+        run: pip install -r requirements.txt
+      - name: Check channels and dispatch captures
+        run: python -m streamclip.monitor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

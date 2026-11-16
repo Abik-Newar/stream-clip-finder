@@ -1,0 +1,51 @@
+# Channels to watch. platform: twitch | kick | youtube
+# For youtube, name is a @handle or UC… channel id (the /live stream is used).
+# Each live channel becomes its own capture agent; up to `max_concurrent`
+# agents run at the same time (default 6).
+#
+# Per-channel kill switch: set `enabled: false` to keep the entry but skip it.
+# The whole system has a one-click START/STOP in the Actions tab (start.yml /
+# stop.yml) — agents never run unless the system is started.
+
+channels:
+  # --- test channel (24/7 live) — swap for your real channels later ------
+  - platform: youtube
+    name: "@LofiGirl"
+    enabled: true
+
+  # - platform: twitch
+  #   name: some_channel
+  #   enabled: true
+
+options:
+  # Clip geometry — clips are always strictly under 90 seconds
+  clip_length: 45        # default lookback before the peak (floor)
+  tail: 15               # seconds recorded after the peak
+  max_clip_seconds: 90   # hard cap (system clamps to 90)
+  min_clip_seconds: 25   # shorter clips are skipped
+  pad_before: 3          # extra seconds before the detected spike
+  segment_time: 10       # internal recording chunk size
+
+  # Detection — see README "How clip detection works"
+  threshold: 2.5         # combined hype z-score that triggers a clip
+  cooldown: 90           # minimum seconds between clips
+  window: 60             # scoring window (seconds)
+  baseline: 900          # rolling baseline window (seconds)
+  min_uptime: 120        # ignore the first N seconds of a capture
+  clip_command_trigger: true   # "clip it" chat spam / streamer voice command
+  scene_snap: true       # snap clip boundaries to visual scene cuts
+
+  # Storage
+  keep_buffer: 900       # seconds of segments kept on disk
+
+  # Intelligence
+  transcription: true    # Whisper transcript keywords (uses more CPU)
+  whisper_model: base    # tiny | base | small (small = best, slowest)
+  ai_ranking: false      # LLM confirms/titles clips (needs OPENAI_API_KEY)
+
+  # Google Drive
+  drive_remote: gdrive
+  drive_folder: StreamClips
+
+  # Scaling
+  max_concurrent: 6      # capture agents allowed at the same time
