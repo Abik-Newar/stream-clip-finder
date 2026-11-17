@@ -1,9 +1,9 @@
 """Backfill the dashboard from Drive manifests.
 
-For a channel+date, reads gdrive:StreamClips/<channel>/<date>/manifest.jsonl
-and publishes a dashboard-data/clips/<clip_key>.json row for every clip that
-does not have one yet (uploads happen in upload.py; share links via
-rclone link as in dashboard.py).
+Reads gdrive:StreamClips/<channel>/manifest.jsonl (the manifest lives at the
+channel root) and publishes a dashboard-data/clips/<clip_key>.json row for
+every clip that does not have one yet. Clips themselves live in a date
+subfolder derived from the entry's `created` timestamp.
 
 Usage (workflow or local with rclone configured):
     python -m streamclip.backfill --channel tarik --date 2026-11-17
@@ -22,10 +22,10 @@ from .dashboard import publish_clip
 log = logging.getLogger("backfill")
 
 
-def fetch_manifest(channel: str, date: str, remote: str, folder: str) -> list[dict]:
+def fetch_manifest(channel: str, remote: str, folder: str) -> list[dict]:
     if not up.rclone_ready():
         raise RuntimeError("rclone/config missing")
-    src = f"{remote}:{folder}/{channel}/{date}/manifest.jsonl"
+    src = f"{remote}:{folder}/{channel}/manifest.jsonl"
     with tempfile.TemporaryDirectory() as tmp:
         dst = Path(tmp) / "manifest.jsonl"
         subprocess.run(["rclone", "copyto", src, str(dst)], check=True, timeout=300)
@@ -40,7 +40,7 @@ def fetch_manifest(channel: str, date: str, remote: str, folder: str) -> list[di
 def main() -> int:
     ap = argparse.ArgumentParser(description="Backfill dashboard rows from Drive")
     ap.add_argument("--channel", required=True)
-    ap.add_argument("--date", required=True, help="YYYY-MM-DD")
+    ap.add_argument("--date", default="all", help="YYYY-MM-DD filter, or 'all'")
     ap.add_argument("--remote", default="gdrive")
     ap.add_argument("--folder", default="StreamClips")
     args = ap.parse_args()
@@ -48,13 +48,20 @@ def main() -> int:
                         format="%(asctime)s %(levelname)s %(message)s")
 
     try:
-        entries = fetch_manifest(args.channel, args.date, args.remote, args.folder)
+        entries = fetch_manifest(args.channel, args.remote, args.folder)
     except Exception as exc:
         log.error("manifest fetch failed: %s", exc)
         return 1
-    log.info("%s existing clips in manifest for %s/%s", len(entries), args.channel, args.date)
-    for entry in entries:
-        publish_clip(entry, f"{args.remote}:{args.folder}/{args.channel}/{args.date}")
+
+    def entry_date(entry):
+        return (entry.get("created") or "")[:10]
+
+    picked = [e for e in entries
+              if args.date == "all" or entry_date(e) == args.date]
+    log.info("%s of %s manifest entries match date filter", len(picked), len(entries))
+    for entry in picked:
+        date = entry_date(entry) or "unknown-date"
+        publish_clip(entry, f"{args.remote}:{args.folder}/{args.channel}/{date}")
     return 0
 
 
