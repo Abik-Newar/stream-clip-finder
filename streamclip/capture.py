@@ -251,28 +251,30 @@ def run(platform, channel, opts: Options, channels=None) -> int:
                 cut(t_start, t_end, s, trig)
                 pending.remove(item)
 
-        # 4) score and maybe trigger — adaptive clip span, strictly < 90 s
+        # 4) peak-based selection: pick the best corroborated moment
         if now - t0 >= opts.min_uptime and not pending:
-            value, detail = scorer.evaluate(now)
-            command_hit = (opts.clip_command_trigger
-                           and scorer.recent_clip_commands(now) > 0)
+            cands = scorer.candidates(
+                now,
+                threshold=opts.threshold,
+                min_signals=opts.min_signals,
+                prominence=opts.peak_prominence,
+                min_distance=opts.peak_min_distance,
+                pre_pad=opts.pre_pad,
+                reaction_tail=opts.reaction_tail,
+                min_clip=opts.min_clip_seconds,
+                max_clip=opts.max_clip_seconds)
             enough_history = last_idx * opts.segment_time >= opts.min_clip_seconds
-            if ((value >= opts.threshold or command_hit) and enough_history
-                    and now - last_clip_at >= opts.cooldown):
-                trigger = "clip command" if command_hit else "score"
-                # clip start: before the spike (chat reacts late), default
-                # lookback as floor, adaptive reach-back up to the 90 s cap
-                spike = scorer.spike_start(now)
-                earliest = now - opts.clip_length
-                if spike:
-                    earliest = min(earliest, spike - opts.pad_before)
-                t_start = max(earliest, now - opts.max_clip_seconds + opts.tail)
-                t_start = min(t_start, now - opts.min_clip_seconds)
-                t_end = now + opts.tail
-                pending.append((t_start, t_end, value, trigger))
-                last_clip_at = now
-                log.info("clip triggered (%s, score %.2f, %.0fs back → %s)",
-                         trigger, value, now - t_start, detail)
+            if cands and enough_history and now - last_clip_at >= opts.cooldown:
+                cand = cands[0]
+                t_start, t_end = cand["clip"]
+                if t_end - t_start >= 10 and t_start > t0 - opts.segment_time:
+                    pending.append((t_start, t_end, cand["score"],
+                                    cand["reason"]))
+                    last_clip_at = now
+                    scorer.note_cut(cand["peak"])
+                    log.info("clip selected: score %.2f | %s | span %+.0fs..%+.0fs",
+                             cand["score"], cand["reason"],
+                             t_start - t0, t_end - t0)
 
         # 5) stop conditions
         if reader is not None and reader.poll() is not None:

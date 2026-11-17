@@ -17,13 +17,20 @@ class Options:
     segment_time: int = 10         # ffmpeg segment length (s)
 
     # Detection
-    threshold: float = 2.5         # combined z-score that triggers a clip
+    threshold: float = 2.5         # fused hype z-score that a peak must reach
     cooldown: int = 90             # min seconds between clips
     window: int = 60               # scoring window (s)
     baseline: int = 900            # rolling baseline window (s)
     min_uptime: int = 120          # ignore the first N seconds of a capture
     clip_command_trigger: bool = True  # "clip it" chat spam / voice commands
     scene_snap: bool = True        # snap cut points to visual scene cuts
+
+    # Peak selection (v3)
+    min_signals: int = 2           # independent signals that must agree
+    peak_prominence: float = 1.0   # how far a peak must stand out
+    peak_min_distance: float = 30  # seconds between distinct peaks
+    pre_pad: float = 3.0           # context seconds before the spike
+    reaction_tail: float = 8.0     # post-play reaction seconds after the peak
 
     # Storage
     keep_buffer: int = 900         # seconds of segments kept on disk

@@ -35,6 +35,7 @@ def snap_to_cuts(segments_dir, rel_start, rel_end, seg_time,
 
     concat_t0 = (int(files[0].stem.split("_")[1]) - 1) * seg_time
     cuts = []
+    list_path = None
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as lf:
             lf.write("".join(f"file '{f.resolve()}'\n" for f in files))
@@ -50,7 +51,8 @@ def snap_to_cuts(segments_dir, rel_start, rel_end, seg_time,
     except Exception:
         cuts = []
     finally:
-        Path(list_path).unlink(missing_ok=True)
+        if list_path:
+            Path(list_path).unlink(missing_ok=True)
 
     if not cuts:
         return rel_start, rel_end
