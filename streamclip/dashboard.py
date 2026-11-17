@@ -75,29 +75,34 @@ AGENT_STATE_DIR = "dashboard-data/agent-state"
 
 
 def publish_agent_state(slot: str, platform: str, channel: str,
-                        run_id: str = "") -> None:
+                        run_id: str = "") -> str:
     """Commit dashboard-data/agent-state/<slot>.json — the agent's live
     channel. Doubles as the claim system (run-title renames are not
-    supported by the API) and as the dashboard's agent visibility."""
+    supported by the API) and as the dashboard's agent visibility.
+    Returns the claim's UTC timestamp (or "" when unavailable)."""
     try:
         token = _token()
         if not token:
-            return
+            return ""
         from datetime import datetime, timezone
+        since = datetime.now(timezone.utc).isoformat()
         doc = {
             "slot": slot,
             "platform": platform,
             "channel": channel,
             "run_id": run_id,
-            "since": datetime.now(timezone.utc).isoformat(),
+            "since": since,
         }
         status = put_file(_repo(), f"{AGENT_STATE_DIR}/{slot}.json",
                           json.dumps(doc, indent=2, sort_keys=True) + "\n",
                           f"agent: {slot} → {platform}/{channel}", token)
         if status not in (200, 201):
             log.warning("dashboard: agent state %s → HTTP %s", slot, status)
+            return ""
+        return since
     except Exception as exc:
         log.warning("dashboard: agent state failed: %s", exc)
+        return ""
 
 
 def drive_file_id(drive_path: str) -> str | None:

@@ -84,32 +84,28 @@ def _active_runs_and_slots(my_run_id):
     return claimed, active_slots
 
 
-def _agent_state_claims(active_slots, my_slot):
-    """Channels other live agents published to dashboard-data/agent-state/.
+_CLAIM_FRESH_S = 1200          # unverified claims trusted for 20 min
 
-    A claim counts only while its run is still active, so dead agents'
-    claims expire automatically (the PATCH-rename API 404s on this repo,
-    which made run-title claims unusable)."""
-    if not os.environ.get("GITHUB_REPOSITORY") or not active_slots:
-        return set()
-    repo = os.environ["GITHUB_REPOSITORY"]
+
+def _read_agent_state():
+    """All agent-state claim files → dicts with slot/platform/channel/since."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return []
     try:
         r = subprocess.run(
             ["gh", "api", f"repos/{repo}/contents/{AGENT_STATE_DIR}",
              "-H", "Accept: application/vnd.github+json"],
             capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
-            return set()
+            return []
         entries = json.loads(r.stdout or "[]")
     except Exception:
-        return set()
-    claimed = set()
+        return []
+    docs = []
     for entry in entries:
         name = entry.get("name", "")
         if not name.endswith(".json"):
-            continue
-        slot = name[:-5]
-        if slot == my_slot or slot not in active_slots:
             continue
         try:
             r2 = subprocess.run(
@@ -119,12 +115,59 @@ def _agent_state_claims(active_slots, my_slot):
             doc = json.loads(r2.stdout or "{}")
         except Exception:
             continue
-        if str(doc.get("run_id")) != active_slots.get(slot, ""):
+        docs.append({
+            "slot": name[:-5],
+            "platform": doc.get("platform"),
+            "channel": str(doc.get("channel") or "").strip()
+                       .lstrip("@").lower(),
+            "since": str(doc.get("since") or ""),
+            "run_id": str(doc.get("run_id") or ""),
+        })
+    return docs
+
+
+def _verified_claims(active_slots, my_slot):
+    """Channels held by other agents whose runs are still active → details.
+
+    A claim counts only while its run is alive, so dead agents' claims
+    expire automatically. If the run list is unavailable (API hiccup),
+    very fresh claims are still trusted — a false block costs a little
+    idle time, a missed claim costs a double capture."""
+    out = {}
+    now = datetime.now(timezone.utc)
+    for doc in _read_agent_state():
+        slot = doc["slot"]
+        if slot == my_slot:
             continue
-        channel = str(doc.get("channel") or "").strip()
-        if channel and channel != "auto":
-            claimed.add((doc.get("platform"), channel.lstrip("@").lower()))
-    return claimed
+        if active_slots:
+            if slot not in active_slots:
+                continue
+            if doc["run_id"] and doc["run_id"] != active_slots.get(slot, ""):
+                continue
+        elif doc["since"]:
+            try:
+                t = datetime.fromisoformat(doc["since"].replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if (now - t).total_seconds() > _CLAIM_FRESH_S:
+                continue
+        if doc["channel"]:
+            out[(doc["platform"], doc["channel"])] = {
+                "slot": slot, "since": doc["since"], "run_id": doc["run_id"]}
+    return out
+
+
+def _agent_state_claims(active_slots, my_slot):
+    """Channels other live agents published to dashboard-data/agent-state/."""
+    return set(_verified_claims(active_slots, my_slot).keys())
+
+
+def _claims_snapshot(my_run_id, my_slot):
+    """(claimed channel keys, claim details) — titles + agent-state files."""
+    claimed, active_slots = _active_runs_and_slots(my_run_id)
+    details = _verified_claims(active_slots, my_slot)
+    claimed |= set(details.keys())
+    return claimed, details
 
 
 def rename_run(platform, channel, slot):
@@ -235,24 +278,42 @@ def build_pool(channels, platform, channel):
 
 def choose_target(pool, ended_at, opts, my_run_id, retry_after=180,
                   my_slot=None):
-    """Pick the next live, unclaimed channel from the pool."""
-    claimed, active_slots = _active_runs_and_slots(my_run_id)
-    claimed |= _agent_state_claims(active_slots, my_slot)
+    """Pick the next live, unclaimed channel from the pool.
+
+    Two agents probing at the same moment can both see "no claim" and pick
+    the same channel (seen live: two Kick agents cut the same moment 2 s
+    apart). So a pick is committed as a claim immediately, then verified:
+    if another agent claimed the same channel earlier, we back off and try
+    the next candidate."""
+    claimed, _ = _claims_snapshot(my_run_id, my_slot)
     now = time.time()
     for p, n in pool:
         key = (p, n.lstrip("@").lower())
-        if key in claimed:
-            continue
         if now - ended_at.get(key, 0) < retry_after:
             continue                       # it just ended — let it rest
+        if key in claimed:
+            continue
         try:
             live, spec = livecheck.probe(p, n)
         except Exception as exc:
             log.debug("probe %s/%s failed: %s", p, n, exc)
             continue
-        if live:
-            return (p, n, spec)
-        log.debug("%s/%s is offline", p, n)
+        if not live:
+            log.debug("%s/%s is offline", p, n)
+            continue
+        # commit our claim, then check we were first to the channel
+        my_since = dashboard.publish_agent_state(my_slot or "slot", p, n,
+                                                 my_run_id)
+        if my_since:
+            time.sleep(3)                  # let a racing agent commit too
+            claimed, details = _claims_snapshot(my_run_id, my_slot)
+            rival = details.get(key)
+            if rival and rival["since"] and rival["since"] < my_since:
+                log.info("%s/%s: %s claimed it first — next candidate",
+                         p, n, rival["slot"])
+                claimed.add(key)
+                continue
+        return (p, n, spec)
     return None
 
 
@@ -388,6 +449,38 @@ class SelectionGate:
         return accepted
 
 
+# ------------------------------------------------------------------ duplicates
+
+def _recent_same_channel(name_prefix, gap_s=480):
+    """True if a clip row for the same channel was published within the last
+    `gap_s` seconds — another agent (or a claim race) already cut this."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return False
+    try:
+        r = subprocess.run(
+            ["gh", "api", f"repos/{repo}/contents/dashboard-data/clips",
+             "-H", "Accept: application/vnd.github+json"],
+            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return False
+        entries = json.loads(r.stdout or "[]")
+    except Exception:
+        return False
+    for entry in entries:
+        name = entry.get("name", "")
+        if not name.startswith(f"{name_prefix}_") or not name.endswith(".json"):
+            continue
+        ts = name[len(name_prefix) + 1:-5]         # "20261117_055047"
+        try:
+            t = datetime.strptime(ts, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if abs((datetime.now(timezone.utc) - t).total_seconds()) <= gap_s:
+            return True
+    return False
+
+
 # ------------------------------------------------------------------ capturing
 
 def capture_channel(platform, channel, reader_spec, opts, stop):
@@ -445,6 +538,11 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
                 max_duration=opts.max_clip_seconds)
         except Exception as exc:
             log.warning("clip cut failed: %s", exc)
+            return
+        if _recent_same_channel(safe_channel):
+            out.unlink(missing_ok=True)
+            log.info("duplicate dropped: %s already cut a moment seconds ago",
+                     channel)
             return
         title = None
         if opts.ai_ranking:

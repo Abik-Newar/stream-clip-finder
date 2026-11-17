@@ -89,6 +89,10 @@ const ICONS = {
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
   dot: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 .9h8a1 1 0 0 0 1-.9L18 7"/></svg>',
+  zap: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4.8 13.5H10L8.5 22 19 9.5h-5.5L13 2z"/></svg>',
+  twitch: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4.3 2 2 5.9v14.2h4.6V22h2.8l2.3-2.4h3.7L21 14.6V2H4.3zm15.2 11.7-2.9 2.9h-4.4l-2.3 2.3v-2.3H6.2V3.6h13.3v10.1z"/><path d="M10.7 6.9h1.6v4.7h-1.6zM14.6 6.9h1.6v4.7h-1.6z"/></svg>',
+  kick: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h5.4v6.1L13.6 3H20l-6.6 8.4L20 21h-6.4l-5.2-6.6V21H3V3z"/></svg>',
+  youtube: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M23 12s0-3.4-.44-5C22.2 5.6 21.1 4.7 19.6 4.5 17.3 4.2 12 4.2 12 4.2s-5.3 0-7.6.3C2.9 4.7 1.8 5.6 1.44 7 1 8.6 1 12 1 12s0 3.4.44 5c.36 1.4 1.46 2.3 2.96 2.5 2.3.3 7.6.3 7.6.3s5.3 0 7.6-.3c1.5-.2 2.6-1.1 2.96-2.5.44-1.6.44-5 .44-5z"/><path d="M9.8 15.6V8.4l6.2 3.6-6.2 3.6z" fill="#0b0e14"/></svg>',
 };
 
 /* ------------------------------------------------------------------- state */
@@ -459,9 +463,9 @@ function cardHTML(c) {
          : ""}`;
 
   return `
-  <article class="card ${c.starred ? "starred" : ""} ${c.status === "done" ? "done" : ""}" data-key="${esc(c.clip_key)}">
+  <article class="card ${c.starred ? "starred" : ""} ${c.status === "done" ? "done" : ""}" data-key="${esc(c.clip_key)}" data-plat="${esc(c.platform)}">
     <div class="card-top">
-      <span class="chbadge"><span class="plat">${esc(c.platform)}</span><span class="nm">${esc(c.channel)}</span></span>
+      <span class="chbadge"><span class="plat plat-${esc(c.platform)}">${esc(c.platform)}</span><span class="nm">${esc(c.channel)}</span></span>
       <span class="spacer"></span>
       ${star}
       ${del}
@@ -544,6 +548,9 @@ function renderBoard() {
     `<button class="chip ${state.filter === id ? "active" : ""}" data-filter="${id}">${label}${extra}</button>`;
 
   const filters = `
+  <div class="fleetstrip" title="The nine agents — live/starting/idle/off">
+    ${fleetDotsHTML()}
+  </div>
   <div class="filterbar">
     ${chip("all", "All active")}
     ${chip("starred", `<span class="star-ic">${ICONS.starFill}</span> Starred`, starredCount ? ` <b>${starredCount}</b>` : "")}
@@ -582,63 +589,102 @@ function renderBoard() {
   </div>`;
 }
 
-function slotRowHTML(slot) {
+function fleetCounts() {
+  let live = 0, starting = 0, idle = 0, off = 0;
+  for (const slot of Object.keys(SLOT_PLATFORM)) {
+    const { run, enabled } = slotState(slot);
+    if (state.stopping.has(slot)) starting += 1;
+    else if (run && run.status === "in_progress") live += 1;
+    else if (run && run.status === "queued") starting += 1;
+    else if (enabled) idle += 1;
+    else off += 1;
+  }
+  return { live, starting, idle, off };
+}
+
+function slotVisual(slot) {
   const platform = SLOT_PLATFORM[slot] || "twitch";
   const { run, enabled } = slotState(slot);
   const st = state.agentState[slot] || {};
-  const busy = state.busy.has(`slot:${slot}`);
-  let status;
-  if (state.stopping.has(slot)) {
-    status = '<span class="pill pill-ip">Stopping…</span>';
-  } else if (run && run.status === "in_progress") {
-    const ch = (st.channel && st.channel !== "auto")
-      ? `${st.platform}/${st.channel}`
-      : (run.channel && run.channel !== "auto" ? `${run.platform}/${run.channel}` : "");
-    status = `<span class="pill pill-dn">${ICONS.dot} Live${ch ? ` · ${esc(ch)}` : " · picking a channel"}</span>`;
-  } else if (run && run.status === "queued") {
-    status = '<span class="pill pill-ip">Starting…</span>';
-  } else if (enabled) {
-    status = '<span class="pill pill-ns">On · waiting for a live channel</span>';
-  } else {
-    status = '<span class="pill pill-ns">Stopped</span>';
+  const stopping = state.stopping.has(slot);
+  let cls = "off", label = "OFF", ch = "";
+  if (stopping) { cls = "starting"; label = "STOPPING"; ch = "cancelling the capture…"; }
+  else if (run && run.status === "in_progress") { cls = "live"; label = "LIVE"; }
+  else if (run && run.status === "queued") { cls = "starting"; label = "STARTING"; }
+  else if (enabled) { cls = "idle"; label = "ON · IDLE"; ch = "waiting for a live channel in the pool"; }
+  if (cls === "live" || (cls === "starting" && !stopping)) {
+    const name = (st.channel && st.channel !== "auto") ? st.channel
+      : (run && run.channel && run.channel !== "auto" ? run.channel : "");
+    ch = name ? `${st.platform || platform}/${name}` : "picking a live channel…";
   }
-  const btn = enabled
+  const since = st.since && cls === "live" ? ` · since ${relTime(st.since)}` : "";
+  return { platform, cls, label, ch, since, enabled, stopping };
+}
+
+function agentTile(slot) {
+  const v = slotVisual(slot);
+  const busy = state.busy.has(`slot:${slot}`);
+  const btn = v.enabled && !v.stopping
     ? `<button class="btn btn-danger btn-sm" data-slotact="stop" data-slot="${slot}" ${busy ? "disabled" : ""}>${ICONS.stop} Stop</button>`
     : `<button class="btn btn-primary btn-sm" data-slotact="start" data-slot="${slot}" ${busy ? "disabled" : ""}>${ICONS.power} Start</button>`;
   return `
-  <div class="slotrow">
-    <span class="slotname mono">${esc(slot)}</span>
-    ${status}
-    <span class="spacer"></span>
-    ${btn}
+  <div class="atile atile--${v.cls}" data-tile="${esc(slot)}">
+    <div class="atile-top">
+      <span class="atile-ic plat-${v.platform}">${ICONS[v.platform] || ICONS.twitch}</span>
+      <span class="atile-state"><span class="tdot"></span>${v.label}</span>
+    </div>
+    <div class="atile-name mono">${esc(slot)}</div>
+    <div class="atile-ch" title="${esc(v.ch)}">${esc(v.ch)}${v.since}</div>
+    <div class="atile-foot">${btn}</div>
   </div>`;
 }
 
+function fleetDotsHTML() {
+  return Object.keys(SLOT_PLATFORM).sort().map((slot) => {
+    const v = slotVisual(slot);
+    return `<span class="fdot fdot--${v.cls}" title="${esc(slot)} · ${v.label}">${esc(slot)}</span>`;
+  }).join("");
+}
+
 function renderAgents() {
+  const c = fleetCounts();
+  const manual = state.runs.filter((r) => r.slot.startsWith("manual"));
+  const manualHTML = manual.map((r) => `
+    <div class="minirun">
+      <span class="picon plat-${esc(r.platform)}">${ICONS[r.platform] || ICONS.twitch}</span>
+      <span class="mono minirun-name">${esc(r.slot)}</span>
+      <span class="pill ${r.status === "in_progress" ? "pill-dn" : "pill-ip"}"><span class="tdot"></span>${r.status === "in_progress" ? `LIVE · ${esc(r.channel)}` : "STARTING"}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-danger btn-sm" data-act="cancelrun" data-run="${r.id}" title="Cancel this agent">${ICONS.stop} Stop</button>
+    </div>`).join("");
   const groups = ["twitch", "kick", "youtube"].map((platform) => {
-    const slots = Object.keys(SLOT_PLATFORM).filter((s) => SLOT_PLATFORM[s] === platform).sort();
-    const manual = state.runs.filter((r) => r.slot.startsWith("manual") && r.platform === platform);
+    const slots = Object.keys(SLOT_PLATFORM)
+      .filter((s) => SLOT_PLATFORM[s] === platform).sort();
     return `
-    <div class="slotgroup">
-      <div class="section-title">${platform} agents <span class="count">3</span></div>
-      <div class="slotcard">${slots.map(slotRowHTML).join("")}
-        ${manual.map((r) => `
-          <div class="slotrow">
-            <span class="slotname mono">${esc(r.slot)}</span>
-            <span class="pill ${r.status === "in_progress" ? "pill-dn" : "pill-ip"}">${ICONS.dot} ${r.status === "in_progress" ? `Live · ${esc(r.channel)}` : "Starting…"}</span>
-            <span class="spacer"></span>
-            <button class="btn btn-danger btn-sm" data-act="cancelrun" data-run="${r.id}" title="Cancel this agent">${ICONS.stop} Stop</button>
-          </div>`).join("")}
-      </div>
+    <div>
+      <div class="section-title plat-${platform}">${platform} agents <span class="count">3</span></div>
+      <div class="atilegrid">${slots.map(agentTile).join("")}</div>
     </div>`;
   }).join("");
-
   return `
   <div class="wrap">
-    <div class="section-title">The nine agents
-      <span class="hint">each slot picks the next live channel of its platform automatically · stopped slots stay off</span>
+    <div class="fleet">
+      <div class="fleet-l">
+        <span class="fleet-ic">${ICONS.zap}</span>
+        <div>
+          <div class="fleet-t">Fleet status</div>
+          <div class="fleet-s">
+            <span class="fleet-n n-live">${c.live} live</span>
+            <span class="fleet-n n-start">${c.starting} starting</span>
+            <span class="fleet-n n-idle">${c.idle} idle</span>
+            <span class="fleet-n n-off">${c.off} off</span>
+          </div>
+        </div>
+      </div>
+      <span class="hint">each agent auto-hops to the next live channel of its platform · stopped slots stay off</span>
     </div>
     <div class="agentgrid">${groups}</div>
+    ${manual.length ? `<div class="section-title">manual captures <span class="count">${manual.length}</span></div><div class="minirunlist">${manualHTML}</div>` : ""}
     <div class="footer">
       <span>Slot switches are stored in-repo (dashboard-data/agents.json) — the monitor keeps enabled slots alive.</span>
     </div>
