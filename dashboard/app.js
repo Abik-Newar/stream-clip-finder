@@ -101,6 +101,7 @@ const state = {
   system: null,          // { on, agents }
   agentsDoc: null,       // { slots: {name: {enabled}}, sha }
   runs: [],              // [{slot, platform, channel, status, id, created}]
+  agentState: {},        // {slot: {platform, channel, run_id, since}}
   busy: new Set(),
   loaded: false,
   error: null,
@@ -227,15 +228,21 @@ async function saveClip(clip, patch, message) {
 /* ------------------------------------------------------- agents (9 slots) */
 
 async function loadAgents() {
-  const [raw, runsJson] = await Promise.all([
-    gh(`/repos/${REPO}/contents/${AGENTS_PATH}`, { raw: true }),
+  const [listing, runsJson, stateList] = await Promise.all([
+    gh(`/repos/${REPO}/contents/${AGENTS_PATH}`),
     gh(`/repos/${REPO}/actions/runs?per_page=40`),
+    gh(`/repos/${REPO}/contents/dashboard-data/agent-state`).catch(() => null),
   ]);
-  if (raw !== null) {
-    let doc = {};
-    try { doc = JSON.parse(raw); } catch { doc = { slots: {} }; }
-    const listing = await gh(`/repos/${REPO}/contents/${AGENTS_PATH}`);
-    state.agentsDoc = { slots: doc.slots || {}, sha: listing ? listing.sha : null };
+  if (listing && typeof listing.content === "string") {
+    try {
+      const b64 = listing.content.replace(/\s/g, "");
+      const doc = JSON.parse(atob(b64));
+      state.agentsDoc = { slots: doc.slots || {}, sha: listing.sha };
+    } catch {
+      state.agentsDoc = state.agentsDoc || { slots: {}, sha: listing.sha };
+    }
+  } else if (listing === null) {
+    state.agentsDoc = { slots: {}, sha: null };
   }
   const runs = [];
   for (const r of runsJson.workflow_runs || []) {
@@ -248,6 +255,19 @@ async function loadAgents() {
     }
   }
   state.runs = runs;
+  state.agentState = {};
+  if (Array.isArray(stateList)) {
+    const docs = await Promise.all(stateList
+      .filter((f) => f.type === "file" && f.name.endsWith(".json"))
+      .map(async (f) => {
+        try {
+          return JSON.parse(await gh(
+            `/repos/${REPO}/contents/dashboard-data/agent-state/${f.name}`,
+            { raw: true }));
+        } catch { return null; }
+      }));
+    for (const d of docs.filter(Boolean)) state.agentState[d.slot] = d;
+  }
 }
 
 async function saveSlot(slot, enabled) {
@@ -486,10 +506,14 @@ function renderBoard() {
 function slotRowHTML(slot) {
   const platform = SLOT_PLATFORM[slot] || "twitch";
   const { run, enabled } = slotState(slot);
+  const st = state.agentState[slot] || {};
   const busy = state.busy.has(`slot:${slot}`);
   let status;
   if (run && run.status === "in_progress") {
-    status = `<span class="pill pill-dn">${ICONS.dot} Live${run.channel ? ` · ${esc(run.platform)}/${esc(run.channel)}` : " · picking a channel"}</span>`;
+    const ch = (st.channel && st.channel !== "auto")
+      ? `${st.platform}/${st.channel}`
+      : (run.channel && run.channel !== "auto" ? `${run.platform}/${run.channel}` : "");
+    status = `<span class="pill pill-dn">${ICONS.dot} Live${ch ? ` · ${esc(ch)}` : " · picking a channel"}</span>`;
   } else if (run && run.status === "queued") {
     status = '<span class="pill pill-ip">Starting…</span>';
   } else if (enabled) {
@@ -633,10 +657,13 @@ document.addEventListener("click", async (event) => {
     btn.disabled = true;
     try {
       await dispatch(act === "start" ? "start.yml" : "stop.yml");
+      state.system = { on: act === "start" };   // optimistic, confirmed by the next poll
+      renderSystem();
       toast(act === "start" ? "Start dispatched — enabled slots are coming up" : "Stop dispatched — agents are being cancelled", "ok");
-      setTimeout(loadSystem, 4000);
-      setTimeout(loadAgents, 8000).then(render);
+      setTimeout(() => loadSystem().catch(() => {}), 4000);
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 8000);
     } catch (err) {
+      state.system = null;
       toast(`Failed: ${err.message}`, "err");
       btn.disabled = false;
     }
@@ -653,14 +680,30 @@ document.addEventListener("click", async (event) => {
       await saveSlot(slot, start);
       if (start) {
         await dispatchCapture(SLOT_PLATFORM[slot] || "twitch", slot);
-        toast(`${slot} started`, "ok");
+        state.runs = state.runs.filter((r) => r.slot !== slot);
+        state.runs.push({ slot, platform: SLOT_PLATFORM[slot] || "twitch",
+          channel: "", status: "queued", id: 0,
+          created: new Date().toISOString() });
+        toast(`${slot} starting — picking a live channel`, "ok");
       } else {
         for (const r of state.runs.filter((x) => x.slot === slot)) {
           try { await cancelRun(r.id); } catch { /* best effort */ }
         }
-        toast(`${slot} stopped`, "ok");
+        state.runs = state.runs.filter((r) => r.slot !== slot);
+        toast(`${slot} stopped — runs cancelled`, "ok");
+        // the monitor can dispatch in the seconds around a stop — sweep again
+        setTimeout(async () => {
+          try {
+            await loadAgents();
+            for (const r of state.runs.filter((x) => x.slot === slot)) {
+              try { await cancelRun(r.id); } catch { /* best effort */ }
+            }
+            await loadAgents();
+          } catch { /* keep going */ }
+          render();
+        }, 5000);
       }
-      setTimeout(loadAgents, 3000).then(render);
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
     } catch (err) {
       toast(`Failed: ${err.message}`, "err");
     }
@@ -673,7 +716,7 @@ document.addEventListener("click", async (event) => {
     try {
       await cancelRun(btn.dataset.run);
       toast("Agent cancelled", "ok");
-      setTimeout(loadAgents, 3000).then(render);
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
     } catch (err) { toast(`Failed: ${err.message}`, "err"); }
     return;
   }
@@ -774,7 +817,7 @@ document.addEventListener("click", async (event) => {
       state.view = "agents";
       document.querySelectorAll(".tab").forEach((t) =>
         t.classList.toggle("active", t.dataset.view === "agents"));
-      setTimeout(loadAgents, 3000).then(render);
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
     } catch (err) {
       toast(`Failed: ${err.message}`, "err");
       go.disabled = false;

@@ -71,6 +71,35 @@ def put_file(repo: str, path: str, text: str, message: str, token: str) -> int:
     return status
 
 
+AGENT_STATE_DIR = "dashboard-data/agent-state"
+
+
+def publish_agent_state(slot: str, platform: str, channel: str,
+                        run_id: str = "") -> None:
+    """Commit dashboard-data/agent-state/<slot>.json — the agent's live
+    channel. Doubles as the claim system (run-title renames are not
+    supported by the API) and as the dashboard's agent visibility."""
+    try:
+        token = _token()
+        if not token:
+            return
+        from datetime import datetime, timezone
+        doc = {
+            "slot": slot,
+            "platform": platform,
+            "channel": channel,
+            "run_id": run_id,
+            "since": datetime.now(timezone.utc).isoformat(),
+        }
+        status = put_file(_repo(), f"{AGENT_STATE_DIR}/{slot}.json",
+                          json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                          f"agent: {slot} → {platform}/{channel}", token)
+        if status not in (200, 201):
+            log.warning("dashboard: agent state %s → HTTP %s", slot, status)
+    except Exception as exc:
+        log.warning("dashboard: agent state failed: %s", exc)
+
+
 def drive_file_id(drive_path: str) -> str | None:
     """Create a public share link for the clip and return its Drive file id."""
     try:

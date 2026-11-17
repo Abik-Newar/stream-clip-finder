@@ -17,8 +17,8 @@ class Options:
     segment_time: int = 10         # ffmpeg segment length (s)
 
     # Detection
-    threshold: float = 2.5         # fused hype z-score that a peak must reach
-    cooldown: int = 90             # min seconds between clips
+    threshold: float = 3.0         # fused hype z-score that a peak must reach
+    cooldown: int = 120            # min seconds between clips
     window: int = 60               # scoring window (s)
     baseline: int = 900            # rolling baseline window (s)
     min_uptime: int = 120          # ignore the first N seconds of a capture
@@ -31,6 +31,15 @@ class Options:
     peak_min_distance: float = 30  # seconds between distinct peaks
     pre_pad: float = 3.0           # context seconds before the spike
     reaction_tail: float = 8.0     # post-play reaction seconds after the peak
+
+    # Quality gates (v4) — keep trash clips out of storage
+    strong_factor: float = 1.35    # score ≥ this × threshold cuts immediately
+    grace_period: int = 75         # unbeaten "lull-best" waits this long, then cuts
+    max_per_hour: int = 3          # rolling-hour clip quota per channel
+    threshold_floor: float = 1.8   # auto-calibration lower bound
+    threshold_ceiling: float = 6.0 # auto-calibration upper bound
+    overlap_iou: float = 0.4       # max overlap allowed with a recent cut
+    quiet_decay: float = 0.97      # threshold decay step during quiet stretches
 
     # Storage
     keep_buffer: int = 900         # seconds of segments kept on disk

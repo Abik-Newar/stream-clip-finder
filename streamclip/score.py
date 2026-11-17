@@ -46,7 +46,9 @@ REACTION_CUES = (
 )
 
 # Signal weights for the fused hype score.
-W_CHAT, W_AUDIO, W_KW, W_CMD = 0.45, 0.30, 0.15, 0.10
+# Research note (Autohighlight/LoL, Park et al. 2022): audio is the single
+# strongest reaction modality, chat is the densest crowd signal.
+W_CHAT, W_AUDIO, W_KW, W_CMD = 0.42, 0.33, 0.15, 0.10
 
 
 class Scorer:
@@ -245,8 +247,16 @@ class Scorer:
             cue_rate = cue_series.get(b, 0.0)
             crowd = z_chat[b] >= 3.0 and uniq >= 0.5 and cue_rate >= 3.0
 
+            # Corroboration scales down to the number of signals that actually
+            # have data (chat can be Cloudflare-blocked on Kick; VAD can strip
+            # music-heavy audio). Requiring 2 of 0 available would freeze
+            # detection forever — the quota/threshold gates still protect us.
+            available = (1 if self.msgs else 0) + (1 if audio_hist else 0) \
+                + (1 if self.kw else 0) + (1 if (self.clip_req or self.voice_cmd) else 0)
+            eff_min = min(min_signals, available) if available else 999
+
             reason = []
-            if not cmd_hit and len(strong) < min_signals and not crowd:
+            if not cmd_hit and len(strong) < eff_min and not crowd:
                 continue                      # no corroboration → not a moment
             if cmd_hit:
                 reason.append("clip command")

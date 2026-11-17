@@ -51,8 +51,8 @@ options:
   segment_time: 10       # internal recording chunk size
 
   # Detection — see README "How clip detection works"
-  threshold: 2.5         # fused hype z-score a peak must reach
-  cooldown: 90           # minimum seconds between clips
+  threshold: 3.0         # fused hype z-score a peak must reach
+  cooldown: 120          # minimum seconds between clips
   window: 60             # scoring window (seconds)
   baseline: 900          # rolling baseline window (seconds)
   min_uptime: 120        # ignore the first N seconds of a capture
@@ -65,6 +65,15 @@ options:
   peak_min_distance: 30  # seconds between distinct peaks
   pre_pad: 3             # context seconds before the spike
   reaction_tail: 8       # post-play reaction seconds after the peak
+
+  # Quality gates (v4) — best-clips-only storage policy
+  strong_factor: 1.35    # score ≥ 1.35×threshold cuts instantly, no waiting
+  grace_period: 75       # a "lull-best" candidate must stay unbeaten this long
+  max_per_hour: 3        # rolling-hour clip quota per channel
+  threshold_floor: 1.8   # auto-calibration bounds (quiet decay / quota raise)
+  threshold_ceiling: 6.0
+  overlap_iou: 0.4       # reject cuts overlapping a recent clip
+  quiet_decay: 0.97      # threshold decay step during quiet stretches
 
   # Storage
   keep_buffer: 900       # seconds of segments kept on disk

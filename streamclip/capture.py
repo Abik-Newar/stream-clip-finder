@@ -51,29 +51,79 @@ def _parse_title(title):
     return platform, channel, slot
 
 
-def _other_claimed_channels(my_run_id):
-    """Channels currently held by other capture agents."""
+AGENT_STATE_DIR = "dashboard-data/agent-state"
+
+
+def _active_runs_and_slots(my_run_id):
+    """Live capture runs → (claims from titles, {slot: run_id})."""
     if not os.environ.get("GITHUB_REPOSITORY"):
-        return set()
+        return set(), {}
     try:
         r = subprocess.run(
             ["gh", "run", "list", "--workflow", "capture.yml", "--limit", "30",
              "--json", "databaseId,status,displayTitle"],
             capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
-            return set()
+            return set(), {}
         data = json.loads(r.stdout or "[]")
     except Exception:
-        return set()
-    claimed = set()
+        return set(), {}
+    claimed, active_slots = set(), {}
     for run in data:
         if str(run.get("databaseId")) == str(my_run_id):
             continue
         if (run.get("status") or "") not in ("in_progress", "queued"):
             continue
         parsed = _parse_title(run.get("displayTitle") or "")
-        if parsed:
-            claimed.add((parsed[0], parsed[1]))
+        if not parsed:
+            continue
+        platform, channel, slot = parsed
+        if channel and channel != "auto":
+            claimed.add((platform, channel.lstrip("@").lower()))
+        active_slots[slot] = str(run.get("databaseId"))
+    return claimed, active_slots
+
+
+def _agent_state_claims(active_slots, my_slot):
+    """Channels other live agents published to dashboard-data/agent-state/.
+
+    A claim counts only while its run is still active, so dead agents'
+    claims expire automatically (the PATCH-rename API 404s on this repo,
+    which made run-title claims unusable)."""
+    if not os.environ.get("GITHUB_REPOSITORY") or not active_slots:
+        return set()
+    repo = os.environ["GITHUB_REPOSITORY"]
+    try:
+        r = subprocess.run(
+            ["gh", "api", f"repos/{repo}/contents/{AGENT_STATE_DIR}",
+             "-H", "Accept: application/vnd.github+json"],
+            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return set()
+        entries = json.loads(r.stdout or "[]")
+    except Exception:
+        return set()
+    claimed = set()
+    for entry in entries:
+        name = entry.get("name", "")
+        if not name.endswith(".json"):
+            continue
+        slot = name[:-5]
+        if slot == my_slot or slot not in active_slots:
+            continue
+        try:
+            r2 = subprocess.run(
+                ["gh", "api", f"repos/{repo}/contents/{AGENT_STATE_DIR}/{name}",
+                 "-H", "Accept: application/vnd.github.raw"],
+                capture_output=True, text=True, timeout=60)
+            doc = json.loads(r2.stdout or "{}")
+        except Exception:
+            continue
+        if str(doc.get("run_id")) != active_slots.get(slot, ""):
+            continue
+        channel = str(doc.get("channel") or "").strip()
+        if channel and channel != "auto":
+            claimed.add((doc.get("platform"), channel.lstrip("@").lower()))
     return claimed
 
 
@@ -183,9 +233,11 @@ def build_pool(channels, platform, channel):
     return pool
 
 
-def choose_target(pool, ended_at, opts, my_run_id, retry_after=180):
+def choose_target(pool, ended_at, opts, my_run_id, retry_after=180,
+                  my_slot=None):
     """Pick the next live, unclaimed channel from the pool."""
-    claimed = _other_claimed_channels(my_run_id)
+    claimed, active_slots = _active_runs_and_slots(my_run_id)
+    claimed |= _agent_state_claims(active_slots, my_slot)
     now = time.time()
     for p, n in pool:
         key = (p, n.lstrip("@").lower())
@@ -202,6 +254,138 @@ def choose_target(pool, ended_at, opts, my_run_id, retry_after=180):
             return (p, n, spec)
         log.debug("%s/%s is offline", p, n)
     return None
+
+
+# ------------------------------------------------------------- quality gates
+
+ARENA_MARGIN = 1.10          # a new candidate must beat the held one by 10%
+
+
+class SelectionGate:
+    """Quality gates between raw peaks and real clips (v4).
+
+    Research-backed rules so storage only fills with the best moments:
+      • strong-cut bar    — score ≥ strong_factor·threshold cuts at once
+      • best-of-lull arena — marginal candidates wait in an arena; a better
+                            one displaces them; the survivor is cut once the
+                            lull settles (grace_period) — one clip per lull
+                            instead of five mediocre ones
+      • quota + cooldown  — max_per_hour rolling cap and minimum spacing
+      • overlap dedupe    — spans overlapping a recent cut are rejected (IoU)
+      • auto-calibration  — threshold decays during long droughts and rises
+                            under quota pressure (disabled when the
+                            threshold is locked via SCF_THRESHOLD)
+    """
+
+    def __init__(self, opts, t0, on_handle=None):
+        self.opts = opts
+        self.cut_times = deque()
+        self.spans = []
+        self.arena = None
+        self.last_clip_at = t0
+        self.last_raise = t0
+        self.last_decay = t0
+        self.on_handle = on_handle or (lambda peak: None)
+        self.locked = bool((os.environ.get("SCF_THRESHOLD") or "").strip())
+
+    # ---------------------------------------------------------------- parts
+
+    def _reserve(self, span):
+        self.spans.append((span[0], span[1]))
+        self.spans = self.spans[-8:]
+
+    def _iou_blocked(self, span):
+        a0, a1 = span
+        for b0, b1 in self.spans:
+            inter = min(a1, b1) - max(a0, b0)
+            if inter <= 0:
+                continue
+            union = max(a1, b1) - min(a0, b0)
+            if union > 0 and inter / union > self.opts.overlap_iou:
+                return True
+        return False
+
+    def _hour_count(self, now):
+        while self.cut_times and now - self.cut_times[0] >= 3600:
+            self.cut_times.popleft()
+        return len(self.cut_times)
+
+    def _raise_threshold(self, now, why):
+        if self.locked or now - self.last_raise < 600:
+            return
+        self.opts.threshold = min(self.opts.threshold_ceiling,
+                                  self.opts.threshold * 1.06)
+        self.last_raise = now
+        log.info("auto-threshold ↑ %.2f (%s pressure)", self.opts.threshold, why)
+
+    def _accept(self, cand, now):
+        if now - self.last_clip_at < self.opts.cooldown:
+            self._raise_threshold(now, "cooldown")
+            return False
+        if self._hour_count(now) >= self.opts.max_per_hour:
+            self._raise_threshold(now, "quota")
+            log.info("clip blocked: hourly quota (%s/h) reached",
+                     self.opts.max_per_hour)
+            return False
+        if self._iou_blocked(cand["clip"]):
+            log.info("clip blocked: overlaps a recent cut")
+            return False
+        self.cut_times.append(now)
+        self._reserve(cand["clip"])
+        self.last_clip_at = now
+        if self.arena is cand:
+            self.arena = None
+        self.on_handle(cand["peak"])
+        return True
+
+    def _hold(self, cand, now):
+        """Park a candidate in the best-of-lull arena (deduped, replaceable)."""
+        self.on_handle(cand["peak"])
+        self.arena = {"clip": cand["clip"], "score": cand["score"],
+                      "reason": cand["reason"], "peak": cand["peak"],
+                      "born": now}
+
+    # ----------------------------------------------------------- main entry
+
+    def observe(self, cands, now, enough=True):
+        """Feed this tick's candidates; returns the ones accepted for cut."""
+        if not enough:
+            return []
+        # quiet stretch — loosen slowly so droughts don't last forever
+        if not self.locked and now - self.last_clip_at >= 2700 \
+                and now - self.last_decay >= 1200:
+            self.opts.threshold = max(self.opts.threshold_floor,
+                                      self.opts.threshold * self.opts.quiet_decay)
+            self.last_decay = now
+            log.info("auto-threshold ↓ %.2f (quiet stretch)", self.opts.threshold)
+
+        accepted = []
+        for cand in cands[:3]:
+            span = cand["clip"]
+            if span[1] - span[0] < 10:
+                continue
+            if self._iou_blocked(span):
+                continue
+            if cand["score"] >= self.opts.threshold * self.opts.strong_factor:
+                if self._accept(cand, now):
+                    log.info("clip accepted: %.2f strong-cut | %s",
+                             cand["score"], cand["reason"])
+                    accepted.append(cand)
+                else:
+                    self._hold(cand, now)     # retry when the gates open
+                break
+            if self.arena is None or \
+                    cand["score"] > self.arena["score"] * ARENA_MARGIN:
+                self._hold(cand, now)
+
+        if self.arena and now - self.arena["born"] >= self.opts.grace_period:
+            held = self.arena
+            if self._accept(held, now):
+                log.info("clip accepted: %.2f best-of-lull | %s",
+                         held["score"], held["reason"])
+                accepted.append(held)
+                self.arena = None
+        return accepted
 
 
 # ------------------------------------------------------------------ capturing
@@ -240,7 +424,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
                          daemon=True).start()
 
     pending = []
-    last_clip_at = 0.0
+    gate = SelectionGate(opts, t0, on_handle=scorer.note_cut)
     last_idx = 0
     result = "ended"
 
@@ -334,8 +518,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
                 cut(t_start, t_end, s, trig)
                 pending.remove(item)
 
-        # 4) peak-based selection
-        if now - t0 >= opts.min_uptime and not pending:
+        # 4) peak-based selection with quality gates (v4)
+        if now - t0 >= opts.min_uptime:
             cands = scorer.candidates(
                 now,
                 threshold=opts.threshold,
@@ -347,16 +531,12 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
                 min_clip=opts.min_clip_seconds,
                 max_clip=opts.max_clip_seconds)
             enough = last_idx * opts.segment_time >= opts.min_clip_seconds
-            if cands and enough and now - last_clip_at >= opts.cooldown:
-                cand = cands[0]
-                t_start, t_end = cand["clip"]
-                if t_end - t_start >= 10 and t_start > t0 - opts.segment_time:
-                    pending.append((t_start, t_end, cand["score"], cand["reason"]))
-                    last_clip_at = now
-                    scorer.note_cut(cand["peak"])
-                    log.info("clip selected: %.2f | %s | %+.0fs..%+.0fs",
-                             cand["score"], cand["reason"],
-                             t_start - t0, t_end - t0)
+            for cand in gate.observe(cands, now, enough):
+                pending.append((cand["clip"][0], cand["clip"][1],
+                                cand["score"], cand["reason"]))
+                log.info("clip selected: %.2f | %s | %+.0fs..%+.0fs",
+                         cand["score"], cand["reason"],
+                         cand["clip"][0] - t0, cand["clip"][1] - t0)
 
         # 5) did the live end?
         if reader is not None and reader.poll() is not None:
@@ -366,6 +546,11 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
             log.info("%s/%s live ended (ffmpeg closed)", platform, channel)
             break
 
+    if gate.arena:
+        a = gate.arena
+        pending.append((a["clip"][0], a["clip"][1], a["score"], a["reason"]))
+        log.info("flushing best-of-lull candidate at stream end (%.2f)",
+                 a["score"])
     for t_start, t_end, s, trig in pending:
         cut(t_start, min(t_end, t0 + last_idx * opts.segment_time), s, trig)
     _stop(reader)
@@ -396,7 +581,7 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     my_run_id = os.environ.get("GITHUB_RUN_ID", "")
     ended_at = {}
 
-    target = choose_target(pool, ended_at, opts, my_run_id)
+    target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
     if target is None:
         # Nothing live right now: retry briefly, then release the runner.
         # The monitor re-launches enabled slots within its 10-minute tick.
@@ -404,7 +589,8 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
             log.info("no live channel in the pool yet — retry %s/3 in 30s",
                      attempt + 1)
             stop.wait(30)
-            target = choose_target(pool, ended_at, opts, my_run_id)
+            target = choose_target(pool, ended_at, opts, my_run_id,
+                                   my_slot=slot)
             if target:
                 break
         if target is None:
@@ -416,12 +602,13 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
         p, n, spec = target
         log.info("▸ agent %s taking %s/%s", slot, p, n)
         rename_run(p, n, slot)
+        dashboard.publish_agent_state(slot, p, n, my_run_id)
         result = capture_channel(p, n, spec, opts, stop)
         if result == "stopped":
             break
         ended_at[(p, n.lstrip("@").lower())] = time.time()
         log.info("%s/%s ended — switching to the next live channel", p, n)
-        target = choose_target(pool, ended_at, opts, my_run_id)
+        target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
         if target is None:
             log.info("nothing else live for %s — agent exiting (monitor will retry)",
                      platform)

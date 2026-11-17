@@ -37,6 +37,17 @@ jobs:
               n=$((n+1))
             fi
           done
+          sleep 8
+          echo "-> second sweep (a dispatch may have raced the stop)"
+          ids2=$(gh run list --workflow capture.yml --repo "$REPO" --limit 60 \
+                   --json databaseId,status \
+                   --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId' 2>/dev/null)
+          for id in $ids2; do
+            if gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1; then
+              echo "   cancelled run $id"
+              n=$((n+1))
+            fi
+          done
           echo "■ SYSTEM OFF — scheduler disabled, $n capture agent(s) cancelled"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
