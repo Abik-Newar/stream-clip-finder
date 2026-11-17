@@ -58,12 +58,32 @@ The system only runs when **you** turn it on:
 |---|---|---|
 | **▶ START** | GitHub repo → **Actions** tab → **"stream-clip ▶ START"** → Run workflow | Enables the scheduler, immediately spins up agents for any live channel |
 | **■ STOP** | Actions tab → **"stream-clip ■ STOP"** → Run workflow | Disables the scheduler **and kills every running agent** within seconds |
+| Freeze only | Settings → Actions → Variables → `SCF_RUNNING` = `false` | Scheduler skips its work, running agents keep going |
 | Per-channel off | Set `enabled: false` on that channel in `config/channels.yml` | Channel skipped, rest keep running |
 
 From your Mac it's the same thing: `./start.sh` and `./stop.sh`.
 
 When stopped, nothing runs and nothing costs anything. When started, agents
 run until the stream ends (or you stop them).
+
+## Add your own channels
+
+Edit `config/channels.yml` and push:
+
+```yaml
+channels:
+  - platform: twitch      # twitch | kick | youtube
+    name: your_channel
+    enabled: true
+```
+
+Up to `max_concurrent` (default 6) channels get their own agent. Then press
+**▶ START**.
+
+**Platform notes (verified from GitHub runner IPs):**
+- **Twitch** — works out of the box (streamlink + anonymous chat) ✅
+- **Kick** — capture works; chat may be blocked by Kick's API on datacenter IPs
+- **YouTube** — needs cookies (run `./export_yt_cookies.sh` once) ⚠️
 
 ## Quick start
 
