@@ -453,6 +453,7 @@ function cardHTML(c) {
       ${pillFor(c)}
     </div>
     ${c.trigger ? `<div class="trigger-line">${esc(c.trigger)}</div>` : ""}
+    ${c.title ? `<div class="clip-title">${ICONS.play}${esc(c.title)}</div>` : ""}
     <div class="card-actions">${actions}</div>
   </article>`;
 }
@@ -676,6 +677,7 @@ function openPlayer(clip) {
       <iframe src="https://drive.google.com/file/d/${esc(clip.drive_id)}/preview" allow="autoplay" allowFullScreen></iframe>
       <div class="modal-foot">
         ${pillFor(clip)}
+        ${clip.title ? `<span class="meta-item">${esc(clip.title)}</span>` : ""}
         <span class="meta-item">${relTime(clip.created_at)}</span>
         ${clip.trigger ? `<span class="meta-item">${esc(clip.trigger)}</span>` : ""}
         <span class="spacer"></span>

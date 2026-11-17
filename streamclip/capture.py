@@ -448,7 +448,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
             return
         title = None
         if opts.ai_ranking:
-            verdict = rank_clip("\n".join(ring))
+            verdict = rank_clip("\n".join(ring), channel, platform)
             if verdict:
                 log.info("AI verdict: %s", verdict)
                 if verdict.get("keep") is False:
@@ -456,6 +456,12 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
                     log.info("AI dropped the clip")
                     return
                 title = verdict.get("title")
+        if title and opts.title_template:
+            try:
+                title = opts.title_template.format(
+                    channel=channel, platform=platform, title=title)
+            except (KeyError, IndexError, ValueError):
+                title = f"{title}"   # malformed template → keep the raw title
         entry = {"platform": platform, "channel": channel, "file": name,
                  "title": title, "score": round(score_val, 2),
                  "trigger": reason,

@@ -47,7 +47,8 @@ class Options:
     # Intelligence
     transcription: bool = True
     whisper_model: str = "base"
-    ai_ranking: bool = False
+    ai_ranking: bool = True        # open-source LLM (Ollama) judges + titles clips
+    title_template: str = ""       # e.g. "🔥 {channel} — {title}" (empty = raw AI title)
 
     # Google Drive
     drive_remote: str = "gdrive"

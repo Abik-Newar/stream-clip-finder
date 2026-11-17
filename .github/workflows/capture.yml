@@ -66,6 +66,25 @@ jobs:
           else
             echo "WARNING: GDRIVE_RCLONE_CONF not set — clips will be kept locally only"
           fi
+      - name: Cache Ollama model
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama
+          key: ollama-${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
+      - name: Start Ollama (open-source AI clip judge)
+        run: |
+          AI_MODEL="${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}"
+          if ! command -v ollama >/dev/null 2>&1; then
+            curl -fsSL https://ollama.com/install.sh | sh
+          fi
+          ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:11434/api/version >/dev/null; then break; fi
+            sleep 1
+          done
+          ollama pull "$AI_MODEL" \
+            || echo "WARNING: model pull failed — clips will publish untitled"
+          ollama list || true
       - name: Capture stream
         run: |
           python -m streamclip.capture \
@@ -74,6 +93,8 @@ jobs:
             --channel "${{ inputs.channel }}"
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AI_BASE_URL: http://localhost:11434/v1
+          AI_MODEL: ${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
           SCF_THRESHOLD: ${{ inputs.threshold }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -81,7 +81,9 @@ options:
   # Intelligence
   transcription: true    # Whisper transcript keywords (uses more CPU)
   whisper_model: base    # tiny | base | small (small = best, slowest)
-  ai_ranking: false      # LLM confirms/titles clips (needs OPENAI_API_KEY)
+  ai_ranking: true       # open-source LLM (Ollama on the runner) judges + titles clips
+  title_template: ""     # title format for every clip, e.g. "🔥 {channel} — {title}"
+                         # placeholders: {channel} {platform} {title} — empty = raw AI title
 
   # Google Drive
   drive_remote: gdrive
