@@ -15,15 +15,23 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Turn the system off and cancel running agents
+        # set +e: every step is best-effort — STOP must never fail halfway
         run: |
-          gh variable set SCF_RUNNING --body "false" 2>/dev/null || true
-          gh workflow disable monitor.yml 2>/dev/null || true
+          set +e
+          echo "-> disabling the monitor scheduler"
+          gh workflow disable monitor.yml || echo "   (monitor was already disabled)"
+          echo "-> clearing the master switch"
+          gh variable set SCF_RUNNING --body "false" || echo "   (variable not permitted — workflow disable still governs)"
+          echo "-> cancelling running capture agents"
           ids=$(gh run list --workflow capture.yml --limit 60 \
                  --json databaseId,status \
-                 --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId')
+                 --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId' 2>/dev/null)
           n=0
           for id in $ids; do
-            gh run cancel "$id" 2>/dev/null && n=$((n+1)) || true
+            if gh run cancel "$id" >/dev/null 2>&1; then
+              echo "   cancelled run $id"
+              n=$((n+1))
+            fi
           done
           echo "■ SYSTEM OFF — scheduler disabled, $n capture agent(s) cancelled"
         env:

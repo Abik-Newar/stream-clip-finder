@@ -17,15 +17,17 @@ jobs:
     steps:
       - name: Turn the system on
         run: |
-          gh workflow enable monitor.yml 2>/dev/null || true
-          gh variable set SCF_RUNNING --body "true" 2>/dev/null \
-            || echo "(variable set skipped — enable/disable still governs)"
-          sleep 3
+          set +e
+          echo "-> enabling the monitor scheduler"
+          gh workflow enable monitor.yml || echo "   (already enabled)"
+          echo "-> setting the master switch"
+          gh variable set SCF_RUNNING --body "true" || echo "   (variable not permitted — workflow enable still governs)"
+          sleep 5
+          echo "-> running an immediate channel check"
           if gh workflow run monitor.yml; then
-            echo "▶ SYSTEM ON — scheduler running; agents start for live channels"
+            echo "▶ SYSTEM ON — agents will spin up for live channels"
           else
-            echo "monitor dispatch failed — check repo Actions permissions"
-            exit 1
+            echo "   (monitor dispatch failed)"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
