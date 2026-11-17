@@ -1,0 +1,20 @@
+{
+  "channel": "rachitroo_1",
+  "clip_key": "rachitroo_1_20261117_055047",
+  "created_at": "2026-11-17T05:50:56.860339+00:00",
+  "done_at": null,
+  "drive_id": "1b5eIwRLDgr72-sJx5J3Us6N52X52DlRa",
+  "drive_path": "gdrive:StreamClips/rachitroo_1/2026-11-17/rachitroo_1_20261117_055047.mp4",
+  "duration": 24.8,
+  "file": "rachitroo_1_20261117_055047.mp4",
+  "platform": "kick",
+  "score": 5.33,
+  "starred": false,
+  "status": "not_started",
+  "stream_t": [
+    60.7,
+    85.7
+  ],
+  "title": null,
+  "trigger": "audio z5.3"
+}
