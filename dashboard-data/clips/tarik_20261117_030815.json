@@ -1,19 +1,16 @@
 {
   "channel": "tarik",
   "clip_key": "tarik_20261117_030815",
-  "created_at": "2026-11-17T03:08:25.122331+00:00",
+  "created_at": "2026-11-17 03:08:34",
   "done_at": null,
-  "drive_id": "1vdhLHLTgxqXWBso3v0OSdMIOFSYdafSL",
-  "drive_path": "gdrive:StreamClips/tarik/2026-11-17/tarik_20261117_030815.mp4",
-  "duration": 14.0,
+  "drive_id": null,
+  "drive_path": "gdrive:StreamClips/tarik/2026-11-17//tarik_20261117_030815.mp4",
+  "duration": 0,
   "file": "tarik_20261117_030815.mp4",
   "platform": "twitch",
-  "score": 2.9,
+  "score": 0,
   "starred": false,
   "status": "not_started",
-  "stream_t": [
-    1392.1,
-    1405.6
-  ],
-  "trigger": "chat z2.0/u1.00, keywords z10.0"
+  "stream_t": null,
+  "trigger": "backfilled (no live scoring data)"
 }
