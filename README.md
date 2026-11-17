@@ -34,21 +34,68 @@ and broadcast highlight-detection research:
 
 | # | Parameter | Why it matters | How we implement it |
 |---|---|---|---|
-| 1 | **Chat velocity vs. own baseline** | Raw counts mean nothing across channels; a spike relative to the channel's normal pace is the signal | z-score of msgs/sec against a rolling 15-min baseline (5s buckets) |
+| 1 | **Chat velocity vs. own baseline** | Raw counts mean nothing across channels; a spike relative to the channel's normal pace is the signal | per-bucket robust z-score (median + MAD) over a rolling 15-min baseline |
 | 2 | **Unique-chatter share** | One spammer ≠ a crowd; broad bursts are the real signal (VoXCluTcH: velocity 45% / chatter entropy 35% / cues 20%) | chat signal = velocity × (0.4 + 0.6·unique-chatter share) |
 | 3 | **Reaction vernacular density** | "pog", "KEKW", "gg", "W" spam is a denser proxy than plain text | curated cue list adds to the chat signal |
 | 4 | **Audio as dB rise over ambient** | Absolute loudness is meaningless (game audio is constant); *sudden rises* mark shouting/laughter/crowd (HotClip: median + 6 dB; EchoMap: ΔdB vs 40 s ambient) | z-score of segment loudness **+ bonus for dB rise above the rolling median** |
-| 5 | **Backward anchoring** | Chat reacts 5–10 s *after* the moment (ClipMe: "the step people miss"); clip start must reach back before the spike | `spike_start()` walks buckets back until activity fades; clip start = spike start − padding |
-| 6 | **Clip commands** | The streamer saying "clip it/this/that" is the highest-precision signal (Eklipse voice command); chat spamming it too | transcript commands + chat commands both force a trigger (bypass threshold), anchored right before the callout |
+| 5 | **Backward anchoring** | Chat reacts 5–10 s *after* the moment (ClipMe: "the step people miss"); clip start must reach back before the spike | the clip span starts at the elevated-period start, minus 3 s of context |
+| 6 | **Clip commands** | The streamer saying "clip it/this/that" is the highest-precision signal (Eklipse voice command); chat spamming it too | transcript commands + chat commands bypass every other rule and win outright |
 | 7 | **Transcript hype & laughter** | Punchlines, "let's go", "hahaha…" correlate with highlights; needed when chat is unavailable | Whisper keywords, weighted; commands score 5× |
-| 8 | **Multi-signal corroboration** | Chat spikes happen for raids/sub-trains too; loud ≠ good (doorbell, sponsor read) | weighted fusion: chat 0.45 / audio 0.30 / kw 0.15 / clip-cmd 0.10; signals must align |
+| 8 | **Multi-signal corroboration** | Chat spikes happen for raids/sub-trains too; loud ≠ good (doorbell, sponsor read) | a candidate needs ≥2 agreeing signals, or one *broad* crowd reaction (many distinct users + cue spam) |
 | 9 | **Scene cuts as edit anchors** | Clean cuts start/end clips instead of mid-action slices (HotClip cut-density) | cheap scene detection (4 fps) snaps boundaries ±3 s |
-| 10 | **Duration policy** | Shorts platforms: 15–90 s; catch the full payoff but stay postable | adaptive span 25–90 s: default 45 s lookback, extends only while the spike is still elevated, hard-capped at 90 s |
+| 10 | **Duration policy** | Shorts platforms: 15–90 s; catch the full payoff but stay postable | adaptive span 25–90 s around the peak, hard-capped at 90 s (measured on the rendered file, not estimated) |
+
+### How a clip is chosen (v3, peak-based)
+
+The previous scorer compared a *smoothed 60 s window* against *sharper 30 s
+history samples* — a mismatch that biased every score and made picks feel
+arbitrary. v3 instead:
+
+1. Builds a **per-5s-bucket** series for chat, unique-chatter share, cues,
+   loudness, keywords and clip commands.
+2. Scores each bucket with **modified z-scores (median + MAD)** — robust to
+   the heavy skew of chat bursts (standard practice for anomaly detection).
+3. **Fuses** the signals: chat 0.45 / audio 0.30 / keywords 0.15 / commands 0.10
+   (renormalised when a signal is missing, e.g. no chat on YouTube).
+4. Finds **peaks** with key-saddle prominence and a minimum separation, so a
+   raid can't trigger a clip and the same moment can't be clipped twice.
+5. **Rejects false positives**: one spammer (unique share < 0.25 without cue
+   spam) is ignored; a peak needs corroboration.
+6. **Grows the span** while the signal stays elevated, then pads 3 s of
+   context before and 8 s of reaction after, clamped to 25–90 s.
+
+Each clip's manifest line records *why* it was chosen, e.g.
+`"trigger": "chat z12.4/u0.91, audio z6.8, keywords z9.1"`.
 
 What we deliberately skip (and why): in-game UI/kill-feed detection (Eklipse's
 game-specific models — per-title training is out of scope), face-cam tracking
 (framing concern, not detection), YAMNet laughter classifiers (too heavy for a
 free Actions runner — Whisper "haha" + audio rises cover most of it).
+
+## The agent model (continuous monitoring + failover)
+
+Agents are **not** tied to one stream — they are tied to a *slot*:
+
+```
+monitor (every 10 min)
+   └─ sees which channels are live → dispatches one agent per live channel
+        │
+        └─ AGENT (up to 6 in parallel)
+             ├─ captures twitch/abc for the WHOLE live
+             ├─ live ends → re-probes the pool
+             ├─ picks the next live channel (skips ones other agents hold)
+             └─ keeps going until you press ■ STOP
+```
+
+- **Claims:** each agent publishes the channel it is on in its workflow-run
+  title (`clip-capture|twitch|jynxzi`), so two agents never record the same
+  stream.
+- **Failover:** when a live ends the agent switches within seconds — no
+  manual restart, no dead air.
+- **Pool:** `config/channels.yml` is an ordered list; the first live,
+  unclaimed channel wins. Set `enabled: false` to pause a channel.
+- **Fresh baseline per channel:** switching channels resets the scorer, so
+  each stream is judged against its own normal chat pace.
 
 ## Start / Stop — full control, one click
 
