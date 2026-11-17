@@ -1,0 +1,13 @@
+{
+  "slots": {
+    "twitch-1":  { "enabled": true },
+    "twitch-2":  { "enabled": true },
+    "twitch-3":  { "enabled": true },
+    "kick-1":    { "enabled": true },
+    "kick-2":    { "enabled": true },
+    "kick-3":    { "enabled": true },
+    "youtube-1": { "enabled": true },
+    "youtube-2": { "enabled": true },
+    "youtube-3": { "enabled": true }
+  }
+}

@@ -1,88 +1,93 @@
-"""Scheduled checker: sees which channels are live and dispatches capture
-workflows. Runs inside GitHub Actions (auth via GITHUB_TOKEN) or locally
-(auth via `gh auth login`).
+"""Slot nurse: keeps the nine capture-agent slots alive.
 
-Supports running up to `max_concurrent` capture agents at once (default 6):
-each live channel gets its own capture job, capped by the pool size.
+Reads dashboard-data/agents.json (edited by the dashboard), then for every
+ENABLED slot that has no in-progress capture run, dispatches capture.yml for
+that slot. The agent itself picks a live channel of its platform, captures
+until the live ends, then switches — or exits fast when nothing is live.
+This monitor re-launches the slot on its next 10-minute tick.
 """
 
+import json
 import os
 import subprocess
 
-from . import livecheck
-from .config import load_config
+SLOT_PLATFORM = {f"{p}-{i}": p for p in ("twitch", "kick", "youtube")
+                 for i in (1, 2, 3)}
+AGENTS_PATH = "dashboard-data/agents.json"
 
 
-def _run_list_json():
-    r = subprocess.run(
-        ["gh", "run", "list", "--workflow", "capture.yml", "--limit", "60",
-         "--json", "displayTitle,status"],
-        capture_output=True, text=True)
+def _gh(*args):
+    return subprocess.run(["gh", *args], capture_output=True, text=True)
+
+
+def load_slots(repo) -> dict:
+    r = _gh("api", f"repos/{repo}/contents/{AGENTS_PATH}",
+            "-H", "Accept: application/vnd.github.raw")
     if r.returncode != 0:
-        return []
-    import json
+        print("agents.json unreadable — nothing to do")
+        return {}
     try:
-        return json.loads(r.stdout) or []
+        data = json.loads(r.stdout or "{}")
     except json.JSONDecodeError:
-        return []
+        print("agents.json invalid — nothing to do")
+        return {}
+    return {name: bool((cfg or {}).get("enabled", False))
+            for name, cfg in (data.get("slots") or {}).items()}
 
 
-def _channel_busy(runs, platform, channel) -> bool:
-    """A live capture run whose title claims this channel."""
-    marker = f"clip-capture|{platform}|{channel}"
+def active_runs() -> dict:
+    """slot → (platform, channel) for running capture agents."""
+    r = _gh("run", "list", "--workflow", "capture.yml", "--limit", "40",
+            "--json", "displayTitle,status")
+    if r.returncode != 0:
+        return {}
+    out = {}
+    try:
+        runs = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return {}
     for run in runs:
-        title = (run.get("displayTitle") or "")
-        status = (run.get("status") or "")
-        if title == marker and status in ("in_progress", "queued"):
-            return True
-    return False
+        if (run.get("status") or "") not in ("in_progress", "queued"):
+            continue
+        parts = (run.get("displayTitle") or "").split("|")
+        if len(parts) >= 4 and parts[0] == "clip-capture":
+            out[parts[3]] = (parts[1], parts[2])
+    return out
 
 
-def _dispatch(platform, channel):
-    r = subprocess.run(
-        ["gh", "workflow", "run", "capture.yml",
-         "-f", f"platform={platform}", "-f", f"channel={channel}"],
-        capture_output=True, text=True)
+def dispatch(platform, slot):
+    r = _gh("workflow", "run", "capture.yml", "-f", f"platform={platform}",
+            "-f", f"slot={slot}", "-f", "channel=")
     if r.returncode == 0:
-        print(f"  → dispatched capture ({platform}/{channel})")
+        print(f"  → dispatched {slot} ({platform})")
     else:
-        print(f"  ! dispatch failed: {r.stderr.strip()}")
+        print(f"  ! dispatch {slot} failed: {r.stderr.strip()}")
 
 
 def main():
-    channels, opts = load_config(os.environ.get("SCF_CONFIG",
-                                                "config/channels.yml"))
-    can_dispatch = bool(os.environ.get("GITHUB_REPOSITORY")
-                        and os.environ.get("GH_TOKEN"))
-    runs = _run_list_json() if can_dispatch else []
-    active = sum(1 for r in runs if r.get("status") in ("in_progress", "queued"))
-    print(f"capture pool: {active}/{opts.max_concurrent} agents busy")
-
-    for ch in channels:
-        platform, name = ch.get("platform"), ch.get("name")
-        if not platform or not name:
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo or not os.environ.get("GH_TOKEN") and not os.environ.get("GITHUB_TOKEN"):
+        print("(needs GITHUB_REPOSITORY + token — nothing to do)")
+        return
+    slots = load_slots(repo)
+    if not slots:
+        return
+    running = active_runs()
+    enabled = [s for s, on in slots.items() if on]
+    print(f"slots: {len(enabled)} enabled, {len(running)} agents running")
+    for slot in sorted(slots):
+        platform = SLOT_PLATFORM.get(slot)
+        if not platform:
+            print(f"{slot}: unknown slot id — skipped")
             continue
-        enabled = ch.get("enabled", True)
-        try:
-            live = livecheck.is_live(platform, name)
-        except Exception as exc:
-            print(f"{platform}/{name}: check failed ({exc})")
+        if not slots[slot]:
+            print(f"{slot}: stopped (disabled in dashboard)")
             continue
-        print(f"{platform}/{name}: {'LIVE' if live else 'offline'}"
-              + ("" if enabled else " (disabled in config)"))
-        if not live or not enabled:
+        if slot in running:
+            p, ch = running[slot]
+            print(f"{slot}: running on {p}/{ch or 'auto'}")
             continue
-        if not can_dispatch:
-            print("  (GH_TOKEN/GITHUB_REPOSITORY missing — cannot auto-dispatch)")
-            continue
-        if _channel_busy(runs, platform, name):
-            print("  capture already running")
-            continue
-        if active >= opts.max_concurrent:
-            print(f"  pool full ({active}/{opts.max_concurrent}) — will retry next tick")
-            continue
-        _dispatch(platform, name)
-        active += 1
+        dispatch(platform, slot)
 
 
 if __name__ == "__main__":

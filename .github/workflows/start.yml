@@ -27,9 +27,9 @@ jobs:
           gh variable set SCF_RUNNING --body "true" --repo "$REPO" \
             || echo "   (variable not permitted — set it in Settings > Actions > Variables)"
           sleep 5
-          echo "-> running an immediate channel check"
+          echo "-> running an immediate slot check"
           if gh workflow run monitor.yml --repo "$REPO"; then
-            echo "▶ SYSTEM ON — agents will spin up for live channels"
+            echo "▶ SYSTEM ON — enabled agent slots are spinning up"
           else
             echo "   (monitor dispatch failed)"
           fi

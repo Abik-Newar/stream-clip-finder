@@ -1,9 +1,9 @@
 name: monitor
 run-name: monitor
 
-# Checks every configured channel and dispatches a capture job for live ones.
-# GitHub's scheduler can drift by a few minutes; the capture job's concurrency
-# group prevents duplicate captures either way.
+# Keeps the nine agent slots alive (per dashboard-data/agents.json) and
+# purges expired dashboard tasks. START/STOP workflows enable/disable this
+# scheduler as the master switch.
 on:
   schedule:
     - cron: "*/10 * * * *"
@@ -15,22 +15,12 @@ permissions:
 
 jobs:
   check:
-    # Master switch = this workflow's enabled state.
-    # The START/STOP workflows enable/disable it (one click in the Actions tab).
-    # Optional extra: set the repo variable SCF_RUNNING=false in
-    # Settings > Actions > Variables to freeze the scheduler without stopping it.
     if: vars.SCF_RUNNING != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install monitor deps
-        run: pip install -r requirements.txt
-      - name: Check channels and dispatch captures
+      - name: Nurse agent slots
         run: python -m streamclip.monitor
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

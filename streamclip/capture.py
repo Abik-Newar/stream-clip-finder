@@ -34,19 +34,21 @@ from .config import Options, load_config
 
 log = logging.getLogger("capture")
 
-RUN_TITLE = "clip-capture|{platform}|{channel}"
+RUN_TITLE = "clip-capture|{platform}|{channel}|{slot}"
 
 
 # --------------------------------------------------------------- run claiming
 
 def _parse_title(title):
-    """'clip-capture|twitch|jynxzi' → ('twitch', 'jynxzi')."""
+    """'clip-capture|twitch|jynxzi|twitch-1' → ('twitch', 'jynxzi', 'twitch-1')."""
     if not title or not title.startswith("clip-capture|"):
         return None
     parts = title.split("|")
     if len(parts) < 3:
         return None
-    return parts[1], parts[2]
+    platform, channel = parts[1], parts[2]
+    slot = parts[3] if len(parts) > 3 else "manual"
+    return platform, channel, slot
 
 
 def _other_claimed_channels(my_run_id):
@@ -71,18 +73,18 @@ def _other_claimed_channels(my_run_id):
             continue
         parsed = _parse_title(run.get("displayTitle") or "")
         if parsed:
-            claimed.add(parsed)
+            claimed.add((parsed[0], parsed[1]))
     return claimed
 
 
-def rename_run(platform, channel):
+def rename_run(platform, channel, slot):
     """Tell other agents we moved: the run title is our claim."""
     if not os.environ.get("GITHUB_REPOSITORY"):
         return
     run_id = os.environ.get("GITHUB_RUN_ID")
     if not run_id:
         return
-    title = RUN_TITLE.format(platform=platform, channel=channel)
+    title = RUN_TITLE.format(platform=platform, channel=channel, slot=slot)
     subprocess.run(
         ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}",
          "--method", "PATCH", "--field", f"name={title}"],
@@ -161,22 +163,22 @@ def transcribe_worker(q, t0, seg_time, scorer, ring, model_name):
 # ------------------------------------------------------------ channel picking
 
 def build_pool(channels, platform, channel):
-    """Ordered pool of channels this agent may take (config first, then the
+    """Ordered pool for THIS agent's platform only (config first, then the
     channel it was dispatched with)."""
     pool, seen = [], set()
     for c in channels or []:
         if c.get("enabled") is False:
             continue
         p, n = c.get("platform"), c.get("name")
-        if not p or not n:
+        if not p or not n or p != platform:
             continue
         key = (p, n.lstrip("@").lower())
         if key in seen:
             continue
         seen.add(key)
         pool.append((p, n))
-    key = (platform, channel.lstrip("@").lower())
-    if key not in seen:
+    key = (platform, (channel or "").lstrip("@").lower())
+    if channel and key not in seen:
         pool.insert(0, (platform, channel))
     return pool
 
@@ -380,7 +382,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
 
 # ---------------------------------------------------------------- supervisor
 
-def run(platform, channel, opts: Options, channels=None) -> int:
+def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     stop = threading.Event()
 
     def on_signal(_s, _f):
@@ -390,27 +392,40 @@ def run(platform, channel, opts: Options, channels=None) -> int:
     signal.signal(signal.SIGINT, on_signal)
 
     pool = build_pool(channels, platform, channel)
-    log.info("agent pool: %s", ", ".join(f"{p}/{n}" for p, n in pool))
+    log.info("agent %s pool: %s", slot, ", ".join(f"{p}/{n}" for p, n in pool))
     my_run_id = os.environ.get("GITHUB_RUN_ID", "")
     ended_at = {}
-    first = True
+
+    target = choose_target(pool, ended_at, opts, my_run_id)
+    if target is None:
+        # Nothing live right now: retry briefly, then release the runner.
+        # The monitor re-launches enabled slots within its 10-minute tick.
+        for attempt in range(3):
+            log.info("no live channel in the pool yet — retry %s/3 in 30s",
+                     attempt + 1)
+            stop.wait(30)
+            target = choose_target(pool, ended_at, opts, my_run_id)
+            if target:
+                break
+        if target is None:
+            log.info("nothing live for %s — agent exiting (monitor will retry)",
+                     platform)
+            return 0
 
     while not stop.is_set():
-        target = choose_target(pool, ended_at, opts, my_run_id)
-        if target is None:
-            if first:
-                log.info("no live channel in the pool yet — waiting")
-                first = False
-            stop.wait(30)
-            continue
         p, n, spec = target
-        log.info("▸ agent taking %s/%s", p, n)
-        rename_run(p, n)
+        log.info("▸ agent %s taking %s/%s", slot, p, n)
+        rename_run(p, n, slot)
         result = capture_channel(p, n, spec, opts, stop)
         if result == "stopped":
             break
         ended_at[(p, n.lstrip("@").lower())] = time.time()
         log.info("%s/%s ended — switching to the next live channel", p, n)
+        target = choose_target(pool, ended_at, opts, my_run_id)
+        if target is None:
+            log.info("nothing else live for %s — agent exiting (monitor will retry)",
+                     platform)
+            break
         stop.wait(5)
     return 0
 
@@ -419,7 +434,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Capture agent")
     ap.add_argument("--platform", required=True,
                     choices=["twitch", "kick", "youtube"])
-    ap.add_argument("--channel", required=True)
+    ap.add_argument("--channel", default="",
+                    help="Channel to capture first; empty = pick from the pool")
+    ap.add_argument("--slot", default="manual",
+                    help="Agent slot id (e.g. twitch-1); run title carries it")
     ap.add_argument("--config", default="config/channels.yml")
     ap.add_argument("--no-upload", action="store_true",
                     help="keep clips in workdir/ instead of uploading")
@@ -429,7 +447,7 @@ def main(argv=None) -> int:
     _channels, opts = load_config(args.config)
     if args.no_upload:
         opts.no_upload = True
-    return run(args.platform, args.channel, opts, _channels)
+    return run(args.platform, args.channel, opts, _channels, args.slot)
 
 
 if __name__ == "__main__":

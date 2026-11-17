@@ -23,7 +23,7 @@ log = logging.getLogger("dashboard")
 
 API = "https://api.github.com"
 DATA_DIR = "dashboard-data/clips"
-DRIVE_LINK_RE = re.compile(r"/d/([A-Za-z0-9_-]{20,})")
+DRIVE_LINK_RE = re.compile(r"(?:/d/|[?&]id=)([A-Za-z0-9_-]{20,})")
 
 
 def _token() -> str | None:
@@ -44,12 +44,31 @@ def _request(method: str, url: str, token: str, payload=None,
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     if data:
         req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=60) as res:
-        body = res.read()
+    try:
+        with urllib.request.urlopen(req, timeout=60) as res:
+            body = res.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()[:200]
     try:
         return res.status, json.loads(body) if body else None
     except ValueError:
         return res.status, body
+
+
+def put_file(repo: str, path: str, text: str, message: str, token: str) -> int:
+    """Create or update a file via the contents API (sha-aware)."""
+    url = f"{API}/repos/{repo}/contents/{path}"
+    content = base64.b64encode(text.encode()).decode()
+    status, _ = _request("PUT", url, token, payload={
+        "message": message, "content": content})
+    if status in (200, 201):
+        return status
+    # 422 = already exists → fetch its sha and update instead
+    status_get, data = _request("GET", url, token)
+    if status_get == 200 and isinstance(data, dict) and data.get("sha"):
+        status, _ = _request("PUT", url, token, payload={
+            "message": message, "content": content, "sha": data["sha"]})
+    return status
 
 
 def drive_file_id(drive_path: str) -> str | None:
@@ -96,13 +115,9 @@ def publish_clip(entry: dict, drive_dest: str) -> None:
             "done_at": None,
         }
         repo = _repo()
-        url = f"{API}/repos/{repo}/contents/{DATA_DIR}/{clip_key}.json"
-        body = base64.b64encode(
-            json.dumps(doc, indent=2, sort_keys=True).encode()).decode()
-        status, _ = _request("PUT", url, token, payload={
-            "message": f"clip: {clip_key}",
-            "content": body,
-        })
+        status = put_file(repo, f"{DATA_DIR}/{clip_key}.json",
+                          json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                          f"clip: {clip_key}", token)
         if status in (200, 201):
             log.info("dashboard: published %s", clip_key)
         else:

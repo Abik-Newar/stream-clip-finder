@@ -269,6 +269,52 @@ select.chip { appearance: none; padding-right: 26px;
 .modal video, .modal iframe { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border: 0; }
 .modal-foot { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border-soft); flex-wrap: wrap; align-items: center; }
 
+/* ------------------------------------------------------------------ tabs */
+.tabs { display: flex; gap: 4px; padding-bottom: 0; border-bottom: 1px solid var(--border-soft); }
+.tab {
+  border: 0; background: none; color: var(--muted); font-weight: 600; font-size: 13px;
+  padding: 9px 14px; border-radius: 8px 8px 0 0; position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); }
+.tab.active::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
+  background: var(--accent); border-radius: 2px;
+}
+.tabcount {
+  background: var(--accent); color: var(--accent-ink); border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; padding: 1px 7px; display: none;
+}
+.tabcount:not(:empty) { display: inline-block; }
+.synced { margin-right: 4px; }
+
+/* ------------------------------------------------------------------ agents */
+.agentgrid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 900px) { .agentgrid { grid-template-columns: repeat(3, 1fr); } }
+.slotcard {
+  background: var(--surface); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); padding: 8px; display: grid; gap: 4px;
+}
+.slotrow {
+  display: flex; align-items: center; gap: 9px; padding: 8px 9px;
+  border-radius: var(--radius-sm); background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+}
+.slotrow .pill { flex-shrink: 0; }
+.slotname { font-size: 12px; font-weight: 600; color: var(--text); width: 74px; flex: none; }
+.slotrow .btn { margin-left: 0; }
+
+/* ------------------------------------------------------------------ manual */
+.manualcard {
+  background: var(--surface); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); padding: 20px; max-width: 620px;
+}
+.manualcard .field input { font-family: var(--mono); }
+.manualcard .btn { margin-top: 6px; }
+.manualnote { color: var(--muted); font-size: 12.5px; margin: 14px 0 0; }
+#murl-preview { display: flex; align-items: center; gap: 9px; min-height: 28px; margin-top: 8px; }
+
 /* ------------------------------------------------------------------ toasts */
 .toasts { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 60; display: grid; gap: 8px; justify-items: center; width: max-content; max-width: 92vw; }
 .toast {

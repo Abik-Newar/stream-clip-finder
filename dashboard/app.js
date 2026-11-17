@@ -1,13 +1,20 @@
 /* ClipDesk: static GitHub-Pages dashboard for the stream-clip-finder system.
    Backend = the GitHub API itself (repo contents + actions).
-   Admin gate = a repo-scoped GitHub token with push access (kept per-browser). */
+   Admin gate = a repo-scoped GitHub token with push access (kept per-browser).
+
+   Pages: Board (review tasks) · Agents (9 slots + manual) · Manual (paste a
+   live URL and start an agent on it). */
 "use strict";
 
 const REPO = "Abik-Newar/stream-clip-finder";
 const API = "https://api.github.com";
 const DATA_DIR = "dashboard-data/clips";
+const AGENTS_PATH = "dashboard-data/agents.json";
 const ARCHIVE_DAYS = 3;
 const AUTH_KEY = "clipdesk_auth_v1";
+const SLOT_PLATFORM = { f: "twitch", "twitch-1": "twitch", "twitch-2": "twitch", "twitch-3": "twitch",
+  "kick-1": "kick", "kick-2": "kick", "kick-3": "kick",
+  "youtube-1": "youtube", "youtube-2": "youtube", "youtube-3": "youtube" };
 
 const STATUS = ["not_started", "in_progress", "reviewing", "done"];
 const LABEL = {
@@ -80,20 +87,24 @@ const ICONS = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M14 5h5v5"/><path d="M19 5 9 15"/><path d="M19 14v5H5V5h5"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+  dot: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>',
 };
 
 /* ------------------------------------------------------------------- state */
 
 const state = {
-  auth: null,            // { token, login }
-  clips: [],             // [{ ...doc, _sha, _name }]
-  shas: new Map(),
-  system: null,          // { on, agents }
-  filter: "all",         // all | starred | not_started | in_progress | reviewing
+  auth: null,
+  clips: [],
+  view: "board",         // board | agents | manual
+  filter: "all",
   channel: "all",
+  system: null,          // { on, agents }
+  agentsDoc: null,       // { slots: {name: {enabled}}, sha }
+  runs: [],              // [{slot, platform, channel, status, id, created}]
   busy: new Set(),
   loaded: false,
   error: null,
+  lastSync: null,
   timers: [],
 };
 
@@ -213,27 +224,70 @@ async function saveClip(clip, patch, message) {
   render();
 }
 
-async function loadSystem() {
-  try {
-    const [wf, runs] = await Promise.all([
-      gh(`/repos/${REPO}/actions/workflows?per_page=50`),
-      gh(`/repos/${REPO}/actions/runs?per_page=30`),
-    ]);
-    const monitor = (wf.workflows || []).find((w) => (w.path || "").endsWith("monitor.yml"));
-    const agents = new Map();
-    for (const r of runs.workflow_runs || []) {
-      const title = r.display_title || "";
-      if (!title.startsWith("clip-capture|")) continue;
-      if (r.status !== "in_progress" && r.status !== "queued") continue;
-      if (!agents.has(title)) agents.set(title, r.created_at || "");
-    }
-    state.system = {
-      on: monitor ? monitor.state === "active" : null,
-      agents: [...agents.keys()].map((t) => ({ title: t.replace("clip-capture|", "") })),
-    };
-  } catch (err) {
-    console.warn("system status failed", err);
+/* ------------------------------------------------------- agents (9 slots) */
+
+async function loadAgents() {
+  const [raw, runsJson] = await Promise.all([
+    gh(`/repos/${REPO}/contents/${AGENTS_PATH}`, { raw: true }),
+    gh(`/repos/${REPO}/actions/runs?per_page=40`),
+  ]);
+  if (raw !== null) {
+    let doc = {};
+    try { doc = JSON.parse(raw); } catch { doc = { slots: {} }; }
+    const listing = await gh(`/repos/${REPO}/contents/${AGENTS_PATH}`);
+    state.agentsDoc = { slots: doc.slots || {}, sha: listing ? listing.sha : null };
   }
+  const runs = [];
+  for (const r of runsJson.workflow_runs || []) {
+    const parts = (r.display_title || "").split("|");
+    if (parts.length >= 4 && parts[0] === "clip-capture") {
+      runs.push({
+        slot: parts[3], platform: parts[1], channel: parts[2],
+        status: r.status, id: r.id, created: r.created_at,
+      });
+    }
+  }
+  state.runs = runs;
+}
+
+async function saveSlot(slot, enabled) {
+  const doc = { slots: { ...(state.agentsDoc ? state.agentsDoc.slots : {}) } };
+  doc.slots[slot] = { enabled };
+  const body = {
+    message: `agents: ${slot} ${enabled ? "enabled" : "stopped"}`,
+    content: b64encode(JSON.stringify(doc, null, 2) + "\n"),
+    sha: state.agentsDoc ? state.agentsDoc.sha : undefined,
+  };
+  try {
+    const res = await gh(`/repos/${REPO}/contents/${AGENTS_PATH}`, { method: "PUT", body });
+    state.agentsDoc = { slots: doc.slots, sha: res.content.sha };
+  } catch (err) {
+    if (err.status === 409 || err.status === 422) {   // sha race — re-read and retry once
+      await loadAgents();
+      const doc2 = { slots: { ...(state.agentsDoc.slots || {}) } };
+      doc2.slots[slot] = { enabled };
+      const res = await gh(`/repos/${REPO}/contents/${AGENTS_PATH}`, {
+        method: "PUT",
+        body: {
+          message: `agents: ${slot} ${enabled ? "enabled" : "stopped"}`,
+          content: b64encode(JSON.stringify(doc2, null, 2) + "\n"),
+          sha: state.agentsDoc.sha,
+        },
+      });
+      state.agentsDoc = { slots: doc2.slots, sha: res.content.sha };
+    } else { throw err; }
+  }
+}
+
+async function dispatchCapture(platform, slot, channel = "", threshold = "") {
+  await gh(`/repos/${REPO}/actions/workflows/capture.yml/dispatches`, {
+    method: "POST",
+    body: { ref: "main", inputs: { platform, slot, channel, threshold } },
+  });
+}
+
+async function cancelRun(runId) {
+  await gh(`/repos/${REPO}/actions/runs/${runId}/cancel`, { method: "POST" });
 }
 
 async function dispatch(workflow) {
@@ -241,6 +295,25 @@ async function dispatch(workflow) {
     method: "POST", body: { ref: "main" },
   });
 }
+
+async function loadSystem() {
+  try {
+    const wf = await gh(`/repos/${REPO}/actions/workflows?per_page=50`);
+    const monitor = (wf.workflows || []).find((w) => (w.path || "").endsWith("monitor.yml"));
+    state.system = { on: monitor ? monitor.state === "active" : null };
+  } catch (err) {
+    console.warn("system status failed", err);
+  }
+}
+
+function slotState(slot) {
+  const run = state.runs.find((r) => r.slot === slot);
+  const enabled = state.agentsDoc && state.agentsDoc.slots &&
+    state.agentsDoc.slots[slot] && state.agentsDoc.slots[slot].enabled;
+  return { run, enabled: !!enabled };
+}
+
+/* ------------------------------------------------------------ clip helpers */
 
 const purgeCutoff = () => Date.now() - ARCHIVE_DAYS * 864e5;
 const isPurged = (c) => c.status === "done" && c.done_at &&
@@ -270,12 +343,14 @@ function cardHTML(c) {
   const star = c.starred
     ? `<button class="iconbtn star-on" data-act="star" title="Remove star" ${busy ? "disabled" : ""}>${ICONS.starFill}</button>`
     : `<button class="iconbtn" data-act="star" title="Star as best clip" ${busy ? "disabled" : ""}>${ICONS.star}</button>`;
-  const play = c.drive_id
-    ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Watch</button>`
-    : `<button class="videobtn" disabled title="Drive link unavailable">${ICONS.playCircle} No link</button>`;
+  const watch = c.drive_id
+    ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Watch</button>
+       <a class="videobtn" title="Open in Drive (new tab)" target="_blank" rel="noopener"
+          href="https://drive.google.com/file/d/${esc(c.drive_id)}/view">${ICONS.external}</a>`
+    : `<span class="meta-item" title="The Drive share link for this clip is not created yet">link pending</span>`;
 
   const actions = isActive(c)
-    ? `${play}
+    ? `${watch}
        <select class="statussel s-${c.status}" data-act="status" aria-label="Task status" ${busy ? "disabled" : ""}>
          ${STATUS.filter((s) => s !== "done").map((s) =>
            `<option value="${s}" ${c.status === s ? "selected" : ""}>${LABEL[s]}</option>`).join("")}
@@ -283,7 +358,11 @@ function cardHTML(c) {
        </select>`
     : `<span class="pill pill-warn">${ICONS.clock} ${countdown(c.done_at)}</span>
        <button class="btn btn-ghost btn-sm" data-act="restore" ${busy ? "disabled" : ""}>${ICONS.restore} Restore</button>
-       ${c.drive_id ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Watch</button>` : ""}`;
+       ${c.drive_id
+         ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Watch</button>
+            <a class="videobtn" title="Open in Drive (new tab)" target="_blank" rel="noopener"
+               href="https://drive.google.com/file/d/${esc(c.drive_id)}/view">${ICONS.external}</a>`
+         : ""}`;
 
   return `
   <article class="card ${c.starred ? "starred" : ""} ${c.status === "done" ? "done" : ""}" data-key="${esc(c.clip_key)}">
@@ -303,11 +382,39 @@ function cardHTML(c) {
   </article>`;
 }
 
+function syncLabel() {
+  if (!state.lastSync) return "";
+  return `<span class="meta-item synced">synced ${relTime(state.lastSync)}</span>`;
+}
+
+function topbarHTML() {
+  return `
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <span class="brand">
+        <img src="./icons/icon-192.png" alt="" />
+        ClipDesk <small>clip control room</small>
+      </span>
+      <span class="spacer"></span>
+      ${syncLabel()}
+      <span class="syspill" id="syspill"><span class="dot"></span> …</span>
+      <button class="btn btn-primary btn-sm" id="btn-start" data-act="start">${ICONS.power} Start all</button>
+      <button class="btn btn-danger btn-sm" id="btn-stop" data-act="stop">${ICONS.stop} Stop all</button>
+      <button class="iconbtn" data-act="logout" title="Sign out">${ICONS.logout}</button>
+    </div>
+    <div class="wrap tabs">
+      <button class="tab ${state.view === "board" ? "active" : ""}" data-view="board">Board</button>
+      <button class="tab ${state.view === "agents" ? "active" : ""}" data-view="agents">Agents <span class="tabcount" id="agent-count"></span></button>
+      <button class="tab ${state.view === "manual" ? "active" : ""}" data-view="manual">Manual capture</button>
+    </div>
+  </header>
+  <main id="page"></main>`;
+}
+
 function renderSystem() {
   const s = state.system;
   const pill = $("#syspill");
-  const chip = $("#agentchip");
-  if (!s) return;
+  if (!s || !pill) return;
   if (s.on === true) {
     pill.className = "syspill on";
     pill.innerHTML = '<span class="dot"></span> System ON';
@@ -318,18 +425,16 @@ function renderSystem() {
     pill.className = "syspill";
     pill.innerHTML = '<span class="dot"></span> Status unknown';
   }
-  const n = s.agents.length;
-  chip.className = `agentchip ${n ? "show" : ""}`;
-  chip.innerHTML = n
-    ? `<b>${n}</b> agent${n === 1 ? "" : "s"} live · ${esc(s.agents.map((a) => a.title).join(", "))}`
-    : "";
   const start = $("#btn-start");
   const stop = $("#btn-stop");
   if (start) start.disabled = s.on === true;
   if (stop) stop.disabled = s.on === false;
+  const live = state.runs.filter((r) => r.status === "in_progress" || r.status === "queued").length;
+  const count = $("#agent-count");
+  if (count) count.textContent = live ? String(live) : "";
 }
 
-function boardHTML() {
+function renderBoard() {
   const clips = visibleClips();
   const active = clips.filter(isActive);
   const archive = clips.filter(isArchived);
@@ -355,7 +460,7 @@ function boardHTML() {
 
   const activeGrid = active.length
     ? `<div class="grid">${active.map(cardHTML).join("")}</div>`
-    : `<div class="statebox"><h3>No clips here yet</h3><p>Agents pull hype moments automatically. New clips appear as tasks within a minute.</p></div>`;
+    : `<div class="statebox"><h3>No clips here yet</h3><p>Agents pull hype moments automatically. New tasks appear within seconds.</p></div>`;
 
   const archiveSection = archive.length
     ? `<div class="section-title">Archive · done tasks <span class="count">${archive.length}</span>
@@ -378,30 +483,100 @@ function boardHTML() {
   </div>`;
 }
 
-function render() {
-  const board = $("#board");
-  if (!board) return;
-  board.innerHTML = boardHTML();
-  renderSystem();
+function slotRowHTML(slot) {
+  const platform = SLOT_PLATFORM[slot] || "twitch";
+  const { run, enabled } = slotState(slot);
+  const busy = state.busy.has(`slot:${slot}`);
+  let status;
+  if (run && run.status === "in_progress") {
+    status = `<span class="pill pill-dn">${ICONS.dot} Live${run.channel ? ` · ${esc(run.platform)}/${esc(run.channel)}` : " · picking a channel"}</span>`;
+  } else if (run && run.status === "queued") {
+    status = '<span class="pill pill-ip">Starting…</span>';
+  } else if (enabled) {
+    status = '<span class="pill pill-ns">Enabled · waiting for the monitor tick</span>';
+  } else {
+    status = '<span class="pill pill-ns">Stopped</span>';
+  }
+  const btn = enabled
+    ? `<button class="btn btn-danger btn-sm" data-slotact="stop" data-slot="${slot}" ${busy ? "disabled" : ""}>${ICONS.stop} Stop</button>`
+    : `<button class="btn btn-primary btn-sm" data-slotact="start" data-slot="${slot}" ${busy ? "disabled" : ""}>${ICONS.power} Start</button>`;
+  return `
+  <div class="slotrow">
+    <span class="slotname mono">${esc(slot)}</span>
+    ${status}
+    <span class="spacer"></span>
+    ${btn}
+  </div>`;
 }
 
-function topbarHTML() {
+function renderAgents() {
+  const groups = ["twitch", "kick", "youtube"].map((platform) => {
+    const slots = Object.keys(SLOT_PLATFORM).filter((s) => SLOT_PLATFORM[s] === platform).sort();
+    const manual = state.runs.filter((r) => r.slot.startsWith("manual") && r.platform === platform);
+    return `
+    <div class="slotgroup">
+      <div class="section-title">${platform} agents <span class="count">3</span></div>
+      <div class="slotcard">${slots.map(slotRowHTML).join("")}
+        ${manual.map((r) => `
+          <div class="slotrow">
+            <span class="slotname mono">${esc(r.slot)}</span>
+            <span class="pill ${r.status === "in_progress" ? "pill-dn" : "pill-ip"}">${ICONS.dot} ${r.status === "in_progress" ? `Live · ${esc(r.channel)}` : "Starting…"}</span>
+            <span class="spacer"></span>
+            <button class="btn btn-danger btn-sm" data-act="cancelrun" data-run="${r.id}" title="Cancel this agent">${ICONS.stop} Stop</button>
+          </div>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
   return `
-  <header class="topbar">
-    <div class="wrap topbar-inner">
-      <span class="brand">
-        <img src="./icons/icon-192.png" alt="" />
-        ClipDesk <small>clip control room</small>
-      </span>
-      <span class="spacer"></span>
-      <span class="syspill" id="syspill"><span class="dot"></span> …</span>
-      <span class="agentchip" id="agentchip"></span>
-      <button class="btn btn-primary btn-sm" id="btn-start" data-act="start">${ICONS.power} Start</button>
-      <button class="btn btn-danger btn-sm" id="btn-stop" data-act="stop">${ICONS.stop} Stop</button>
-      <button class="iconbtn" data-act="logout" title="Sign out">${ICONS.logout}</button>
+  <div class="wrap">
+    <div class="section-title">The nine agents
+      <span class="hint">each slot picks the next live channel of its platform automatically · stopped slots stay off</span>
     </div>
-  </header>
-  <main id="board" class="wrap"></main>`;
+    <div class="agentgrid">${groups}</div>
+    <div class="footer">
+      <span>Slot switches are stored in-repo (dashboard-data/agents.json) — the monitor keeps enabled slots alive.</span>
+    </div>
+  </div>`;
+}
+
+function renderManual() {
+  return `
+  <div class="wrap">
+    <div class="section-title">Manual capture <span class="hint">paste a live channel link — an agent watches it and pulls clips</span></div>
+    <div class="manualcard">
+      <div class="field">
+        <label for="murl">Stream link (Twitch, Kick or YouTube)</label>
+        <input id="murl" type="url" spellcheck="false" placeholder="https://kick.com/rachitroo_1" />
+        <div class="err" id="murl-err"></div>
+      </div>
+      <div id="murl-preview"></div>
+      <button class="btn btn-primary" id="murl-go" disabled>${ICONS.power} Start agent on this link</button>
+      <p class="manualnote">The agent captures the live stream, detects hype moments and files clips on the Board automatically. It keeps watching until the live ends.</p>
+    </div>
+  </div>`;
+}
+
+function parseStreamUrl(raw) {
+  const url = String(raw || "").trim();
+  let m = url.match(/^(?:https?:\/\/)?(?:www\.)?twitch\.tv\/([\w-]{2,})/i);
+  if (m) return { platform: "twitch", name: m[1] };
+  m = url.match(/^(?:https?:\/\/)?(?:www\.)?kick\.com\/([\w-]{2,})/i);
+  if (m) return { platform: "kick", name: m[1] };
+  m = url.match(/^(?:https?:\/\/)?(?:www\.)?youtube\.com\/@([\w.-]{2,})/i);
+  if (m) return { platform: "youtube", name: `@${m[1]}` };
+  m = url.match(/^(?:https?:\/\/)?(?:www\.)?youtube\.com\/channel\/(UC[\w-]{10,})/i);
+  if (m) return { platform: "youtube", name: m[1] };
+  return null;
+}
+
+function render() {
+  const page = $("#page");
+  if (!page) return;
+  page.innerHTML =
+    state.view === "board" ? renderBoard() :
+    state.view === "agents" ? renderAgents() : renderManual();
+  renderSystem();
 }
 
 /* ------------------------------------------------------------------ player */
@@ -438,25 +613,68 @@ function closePlayer() {
 /* ------------------------------------------------------------------ events */
 
 document.addEventListener("click", async (event) => {
+  const tab = event.target.closest("[data-view]");
+  if (tab) {
+    state.view = tab.dataset.view;
+    document.querySelectorAll(".tab").forEach((t) =>
+      t.classList.toggle("active", t.dataset.view === state.view));
+    render();
+    return;
+  }
+
   const btn = event.target.closest("[data-act]");
   if (!btn) return;
   const act = btn.dataset.act;
 
   if (act === "closemodal") { closePlayer(); return; }
-
   if (act === "logout") { logout(); return; }
 
   if (act === "start" || act === "stop") {
     btn.disabled = true;
     try {
       await dispatch(act === "start" ? "start.yml" : "stop.yml");
-      toast(act === "start" ? "Start dispatched — system is coming up" : "Stop dispatched — agents are being cancelled", "ok");
+      toast(act === "start" ? "Start dispatched — enabled slots are coming up" : "Stop dispatched — agents are being cancelled", "ok");
       setTimeout(loadSystem, 4000);
-      setTimeout(loadSystem, 12000);
+      setTimeout(loadAgents, 8000).then(render);
     } catch (err) {
       toast(`Failed: ${err.message}`, "err");
       btn.disabled = false;
     }
+    return;
+  }
+
+  const slotBtn = event.target.closest("[data-slotact]");
+  if (slotBtn) {
+    const slot = slotBtn.dataset.slot;
+    const start = slotBtn.dataset.slotact === "start";
+    state.busy.add(`slot:${slot}`);
+    render();
+    try {
+      await saveSlot(slot, start);
+      if (start) {
+        await dispatchCapture(SLOT_PLATFORM[slot] || "twitch", slot);
+        toast(`${slot} started`, "ok");
+      } else {
+        for (const r of state.runs.filter((x) => x.slot === slot)) {
+          try { await cancelRun(r.id); } catch { /* best effort */ }
+        }
+        toast(`${slot} stopped`, "ok");
+      }
+      setTimeout(loadAgents, 3000).then(render);
+    } catch (err) {
+      toast(`Failed: ${err.message}`, "err");
+    }
+    state.busy.delete(`slot:${slot}`);
+    render();
+    return;
+  }
+
+  if (act === "cancelrun") {
+    try {
+      await cancelRun(btn.dataset.run);
+      toast("Agent cancelled", "ok");
+      setTimeout(loadAgents, 3000).then(render);
+    } catch (err) { toast(`Failed: ${err.message}`, "err"); }
     return;
   }
 
@@ -501,7 +719,7 @@ document.addEventListener("change", async (event) => {
         status,
         done_at: status === "done" ? new Date().toISOString() : null,
       }, `task: ${clip.clip_key} → ${status}`);
-      if (status === "done") toast("Moved to archive · video purged from the board, kept 3 days", "ok");
+      if (status === "done") toast("Moved to archive · kept 3 days, restorable", "ok");
     } catch (err) {
       toast(`Failed: ${err.message}`, "err");
       render();
@@ -514,14 +732,55 @@ document.addEventListener("change", async (event) => {
 });
 
 document.addEventListener("click", (event) => {
-  if (event.target.closest('[data-filter]')) {
+  if (event.target.closest("[data-filter]")) {
     state.filter = event.target.closest("[data-filter]").dataset.filter;
     render();
   }
 });
 
+document.addEventListener("input", (event) => {
+  if (event.target.id !== "murl") return;
+  const parsed = parseStreamUrl(event.target.value);
+  const err = $("#murl-err");
+  const prev = $("#murl-preview");
+  const go = $("#murl-go");
+  if (!event.target.value.trim()) { err.textContent = ""; prev.innerHTML = ""; go.disabled = true; return; }
+  if (parsed) {
+    err.textContent = "";
+    prev.innerHTML = `<span class="pill pill-ip">${esc(parsed.platform)}</span>
+      <span class="meta-item">agent will watch <b>${esc(parsed.name)}</b></span>`;
+    go.disabled = false;
+  } else {
+    err.textContent = "Not a Twitch / Kick / YouTube channel link. For YouTube paste the @handle page.";
+    prev.innerHTML = "";
+    go.disabled = true;
+  }
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closePlayer();
+});
+
+document.addEventListener("click", async (event) => {
+  if (event.target.closest("#murl-go")) {
+    const parsed = parseStreamUrl($("#murl").value);
+    if (!parsed) return;
+    const go = $("#murl-go");
+    go.disabled = true;
+    go.textContent = "Dispatching…";
+    try {
+      await dispatchCapture(parsed.platform, "manual", parsed.name);
+      toast(`Manual agent dispatched on ${parsed.platform}/${parsed.name}`, "ok");
+      state.view = "agents";
+      document.querySelectorAll(".tab").forEach((t) =>
+        t.classList.toggle("active", t.dataset.view === "agents"));
+      setTimeout(loadAgents, 3000).then(render);
+    } catch (err) {
+      toast(`Failed: ${err.message}`, "err");
+      go.disabled = false;
+      go.innerHTML = `${ICONS.power} Start agent on this link`;
+    }
+  }
 });
 
 /* ------------------------------------------------------------------- login */
@@ -581,7 +840,8 @@ async function boot() {
   app.innerHTML = topbarHTML();
   render();
   try {
-    await Promise.all([loadClips(), loadSystem()]);
+    await Promise.all([loadClips(), loadSystem(), loadAgents()]);
+    state.lastSync = new Date().toISOString();
   } catch (err) {
     state.error = `Could not load data: ${err.message}`;
   }
@@ -590,16 +850,22 @@ async function boot() {
   state.timers.forEach(clearInterval);
   state.timers = [
     setInterval(async () => {
-      try { await loadClips(); if (!document.hidden) render(); }
+      if (document.hidden) return;
+      try { await loadClips(); state.lastSync = new Date().toISOString(); render(); }
       catch (err) { state.error = err.message; }
-    }, 20000),
+    }, 10000),
     setInterval(async () => {
+      if (document.hidden) return;
+      await loadAgents();
       await loadSystem();
-      if (!document.hidden) renderSystem();
-    }, 30000),
+      render();
+    }, 15000),
   ];
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) { loadClips().then(render).catch(() => {}); loadSystem().then(renderSystem); }
+    if (document.hidden) return;
+    Promise.all([loadClips(), loadAgents(), loadSystem()])
+      .then(() => { state.lastSync = new Date().toISOString(); render(); })
+      .catch(() => {});
   });
 }
 
