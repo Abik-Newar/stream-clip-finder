@@ -164,6 +164,7 @@ select.chip { appearance: none; padding-right: 26px;
 .iconbtn svg { width: 17px; height: 17px; }
 .iconbtn.star-on { color: var(--star); }
 .iconbtn.star-on:hover { color: var(--star); }
+.iconbtn.del:hover { color: #e5484d; border-color: #e5484d66; background: #e5484d14; }
 
 .card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .meta-item {

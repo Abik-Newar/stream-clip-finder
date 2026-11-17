@@ -88,6 +88,7 @@ const ICONS = {
   external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M14 5h5v5"/><path d="M19 5 9 15"/><path d="M19 14v5H5V5h5"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
   dot: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 .9h8a1 1 0 0 0 1-.9L18 7"/></svg>',
 };
 
 /* ------------------------------------------------------------------- state */
@@ -103,6 +104,7 @@ const state = {
   runs: [],              // [{slot, platform, channel, status, id, created}]
   agentState: {},        // {slot: {platform, channel, run_id, since}}
   busy: new Set(),
+  stopping: new Map(),   // slot → ts: runs are being cancelled, show "Stopping…"
   loaded: false,
   error: null,
   lastSync: null,
@@ -225,6 +227,15 @@ async function saveClip(clip, patch, message) {
   render();
 }
 
+async function deleteClip(clipKey) {
+  const meta = await gh(`/repos/${REPO}/contents/${DATA_DIR}/${clipKey}.json`);
+  if (!meta || !meta.sha) throw new ApiError(404, "clip file not found");
+  await gh(`/repos/${REPO}/contents/${DATA_DIR}/${clipKey}.json`, {
+    method: "DELETE",
+    body: { message: `clip: delete ${clipKey}`, sha: meta.sha },
+  });
+}
+
 /* ------------------------------------------------------- agents (9 slots) */
 
 async function loadAgents() {
@@ -268,6 +279,14 @@ async function loadAgents() {
       }));
     for (const d of docs.filter(Boolean)) state.agentState[d.slot] = d;
   }
+  // clear "Stopping…" markers once the runs are really gone (or after 3 min)
+  for (const slot of [...state.stopping.keys()]) {
+    const stillRunning = state.runs.some((r) => r.slot === slot &&
+      (r.status === "in_progress" || r.status === "queued"));
+    if (!stillRunning || Date.now() - state.stopping.get(slot) > 180000) {
+      state.stopping.delete(slot);
+    }
+  }
 }
 
 async function saveSlot(slot, enabled) {
@@ -295,6 +314,40 @@ async function saveSlot(slot, enabled) {
         },
       });
       state.agentsDoc = { slots: doc2.slots, sha: res.content.sha };
+    } else { throw err; }
+  }
+}
+
+async function commitAgents(on) {
+  // Master start/stop: flip every slot in agents.json (the workflows do the
+  // same server-side — this is the fast browser-side commit).
+  const slots = { ...(state.agentsDoc ? state.agentsDoc.slots : {}) };
+  for (const s of Object.keys(SLOT_PLATFORM)) slots[s] = { enabled: on };
+  const msg = `agents: master ${on ? "start" : "stop"} — all slots ${on ? "enabled" : "disabled"}`;
+  try {
+    const res = await gh(`/repos/${REPO}/contents/${AGENTS_PATH}`, {
+      method: "PUT",
+      body: {
+        message: msg,
+        content: b64encode(JSON.stringify({ slots }, null, 2) + "\n"),
+        sha: state.agentsDoc ? state.agentsDoc.sha : undefined,
+      },
+    });
+    state.agentsDoc = { slots, sha: res.content.sha };
+  } catch (err) {
+    if (err.status === 409 || err.status === 422) {   // sha race — retry once
+      await loadAgents();
+      const slots2 = { ...(state.agentsDoc ? state.agentsDoc.slots : {}) };
+      for (const s of Object.keys(SLOT_PLATFORM)) slots2[s] = { enabled: on };
+      const res = await gh(`/repos/${REPO}/contents/${AGENTS_PATH}`, {
+        method: "PUT",
+        body: {
+          message: msg,
+          content: b64encode(JSON.stringify({ slots: slots2 }, null, 2) + "\n"),
+          sha: state.agentsDoc ? state.agentsDoc.sha : undefined,
+        },
+      });
+      state.agentsDoc = { slots: slots2, sha: res.content.sha };
     } else { throw err; }
   }
 }
@@ -363,6 +416,7 @@ function cardHTML(c) {
   const star = c.starred
     ? `<button class="iconbtn star-on" data-act="star" title="Remove star" ${busy ? "disabled" : ""}>${ICONS.starFill}</button>`
     : `<button class="iconbtn" data-act="star" title="Star as best clip" ${busy ? "disabled" : ""}>${ICONS.star}</button>`;
+  const del = `<button class="iconbtn del" data-act="delete" title="Delete this clip from the board (the video file stays in Google Drive)" ${busy ? "disabled" : ""}>${ICONS.trash}</button>`;
   const watch = c.drive_id
     ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Watch</button>
        <a class="videobtn" title="Open in Drive (new tab)" target="_blank" rel="noopener"
@@ -390,6 +444,7 @@ function cardHTML(c) {
       <span class="chbadge"><span class="plat">${esc(c.platform)}</span><span class="nm">${esc(c.channel)}</span></span>
       <span class="spacer"></span>
       ${star}
+      ${del}
     </div>
     <div class="card-meta">
       <span class="meta-item">${ICONS.clock} ${relTime(c.created_at)}</span>
@@ -509,7 +564,9 @@ function slotRowHTML(slot) {
   const st = state.agentState[slot] || {};
   const busy = state.busy.has(`slot:${slot}`);
   let status;
-  if (run && run.status === "in_progress") {
+  if (state.stopping.has(slot)) {
+    status = '<span class="pill pill-ip">Stopping…</span>';
+  } else if (run && run.status === "in_progress") {
     const ch = (st.channel && st.channel !== "auto")
       ? `${st.platform}/${st.channel}`
       : (run.channel && run.channel !== "auto" ? `${run.platform}/${run.channel}` : "");
@@ -655,11 +712,27 @@ document.addEventListener("click", async (event) => {
 
   if (act === "start" || act === "stop") {
     btn.disabled = true;
+    const on = act === "start";
     try {
-      await dispatch(act === "start" ? "start.yml" : "stop.yml");
-      state.system = { on: act === "start" };   // optimistic, confirmed by the next poll
-      renderSystem();
-      toast(act === "start" ? "Start dispatched — enabled slots are coming up" : "Stop dispatched — agents are being cancelled", "ok");
+      await dispatch(on ? "start.yml" : "stop.yml");
+      state.system = { on };   // optimistic, confirmed by the next poll
+      // flip every agent slot immediately so the rows match the master switch
+      if (state.agentsDoc) {
+        state.agentsDoc.slots = Object.fromEntries(
+          Object.keys(SLOT_PLATFORM).map((s) => [s, { enabled: on }]));
+      }
+      if (on) {
+        state.stopping.clear();
+      } else {
+        for (const r of state.runs) {
+          try { await cancelRun(r.id); } catch { /* best effort */ }
+        }
+        for (const s of Object.keys(SLOT_PLATFORM)) state.stopping.set(s, Date.now());
+      }
+      render();
+      // commit agents.json too (stop.yml/start.yml also do it server-side)
+      commitAgents(on).catch(() => {});
+      toast(on ? "Start dispatched — enabled slots are coming up" : "Stop dispatched — agents are being cancelled", "ok");
       setTimeout(() => loadSystem().catch(() => {}), 4000);
       setTimeout(() => loadAgents().then(render).catch(() => {}), 8000);
     } catch (err) {
@@ -674,22 +747,32 @@ document.addEventListener("click", async (event) => {
   if (slotBtn) {
     const slot = slotBtn.dataset.slot;
     const start = slotBtn.dataset.slotact === "start";
+    const stopRuns = state.runs.filter((x) => x.slot === slot);
+    // instant flip — button + pill change BEFORE any network call
     state.busy.add(`slot:${slot}`);
+    if (state.agentsDoc) {
+      state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
+        [slot]: { enabled: start } };
+    }
+    state.runs = state.runs.filter((r) => r.slot !== slot);
+    if (start) {
+      state.stopping.delete(slot);
+      state.runs.push({ slot, platform: SLOT_PLATFORM[slot] || "twitch",
+        channel: "", status: "queued", id: 0,
+        created: new Date().toISOString() });
+    } else {
+      state.stopping.set(slot, Date.now());
+    }
     render();
     try {
       await saveSlot(slot, start);
       if (start) {
         await dispatchCapture(SLOT_PLATFORM[slot] || "twitch", slot);
-        state.runs = state.runs.filter((r) => r.slot !== slot);
-        state.runs.push({ slot, platform: SLOT_PLATFORM[slot] || "twitch",
-          channel: "", status: "queued", id: 0,
-          created: new Date().toISOString() });
         toast(`${slot} starting — picking a live channel`, "ok");
       } else {
-        for (const r of state.runs.filter((x) => x.slot === slot)) {
+        for (const r of stopRuns) {
           try { await cancelRun(r.id); } catch { /* best effort */ }
         }
-        state.runs = state.runs.filter((r) => r.slot !== slot);
         toast(`${slot} stopped — runs cancelled`, "ok");
         // the monitor can dispatch in the seconds around a stop — sweep again
         setTimeout(async () => {
@@ -706,8 +789,14 @@ document.addEventListener("click", async (event) => {
       setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
     } catch (err) {
       toast(`Failed: ${err.message}`, "err");
+      // revert the optimistic flip so the UI matches reality again
+      if (state.agentsDoc) state.agentsDoc.slots[slot] = { enabled: !start };
+      if (start) state.runs = state.runs.filter((r) => r.slot !== slot);
+      state.stopping.delete(slot);
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 500);
     }
     state.busy.delete(`slot:${slot}`);
+    if (start) state.stopping.delete(slot);   // stop markers purge via loadAgents
     render();
     return;
   }
@@ -732,6 +821,20 @@ document.addEventListener("click", async (event) => {
     state.busy.add(clip.clip_key);
     try { await saveClip(clip, { starred: !clip.starred }); }
     catch (err) { toast(`Failed: ${err.message}`, "err"); }
+    state.busy.delete(clip.clip_key);
+    render();
+    return;
+  }
+
+  if (act === "delete") {
+    if (!confirm(`Delete "${clip.clip_key}" from the board?\n\nThe video file stays in Google Drive — this only removes the task row.`)) return;
+    state.busy.add(clip.clip_key);
+    render();
+    try {
+      await deleteClip(clip.clip_key);
+      state.clips = state.clips.filter((c) => c.clip_key !== clip.clip_key);
+      toast("Clip deleted from the board (video stays in Drive)", "ok");
+    } catch (err) { toast(`Failed: ${err.message}`, "err"); }
     state.busy.delete(clip.clip_key);
     render();
     return;

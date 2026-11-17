@@ -26,6 +26,42 @@ jobs:
           echo "-> clearing the master switch"
           gh variable set SCF_RUNNING --body "false" --repo "$REPO" \
             || echo "   (variable not permitted — set it in Settings > Actions > Variables)"
+          echo "-> disabling every agent slot (agents.json)"
+          python3 - <<'PY'
+          import base64, json, os, subprocess
+          from urllib.request import Request, urlopen
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tok = subprocess.run(["gh", "auth", "token"],
+                               capture_output=True, text=True).stdout.strip()
+          path = "dashboard-data/agents.json"
+          url = f"https://api.github.com/repos/{repo}/contents/{path}"
+          hdr = {"Authorization": f"Bearer {tok}",
+                 "Accept": "application/vnd.github+json"}
+          sha = None
+          try:
+              with urlopen(Request(url, headers=hdr), timeout=30) as r:
+                  sha = json.load(r)["sha"]
+          except Exception:
+              pass
+          try:
+              doc = json.load(open(path))
+          except Exception:
+              doc = {}
+          doc["slots"] = {k: {"enabled": False} for k in doc.get("slots", {})}
+          payload = {"message": "agents: master stop — all slots disabled",
+                     "content": base64.b64encode(
+                         (json.dumps(doc, indent=2) + "\n").encode()).decode()}
+          if sha:
+              payload["sha"] = sha
+          req = Request(url, data=json.dumps(payload).encode(),
+                        headers={**hdr, "Content-Type": "application/json"},
+                        method="PUT")
+          try:
+              urlopen(req, timeout=30)
+              print("   all agent slots disabled")
+          except Exception as e:
+              print(f"   (agents.json update failed: {e})")
+          PY
           echo "-> cancelling running capture agents"
           ids=$(gh run list --workflow capture.yml --repo "$REPO" --limit 60 \
                  --json databaseId,status \
