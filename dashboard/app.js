@@ -105,6 +105,7 @@ const state = {
   agentState: {},        // {slot: {platform, channel, run_id, since}}
   busy: new Set(),
   stopping: new Map(),   // slot → ts: runs are being cancelled, show "Stopping…"
+  starting: 0,           // ts of the last master Start — "Starting…" until confirmed
   loaded: false,
   error: null,
   lastSync: null,
@@ -371,9 +372,28 @@ async function dispatch(workflow) {
 
 async function loadSystem() {
   try {
-    const wf = await gh(`/repos/${REPO}/actions/workflows?per_page=50`);
-    const monitor = (wf.workflows || []).find((w) => (w.path || "").endsWith("monitor.yml"));
-    state.system = { on: monitor ? monitor.state === "active" : null };
+    const [wf, v] = await Promise.all([
+      gh(`/repos/${REPO}/actions/workflows?per_page=50`),
+      gh(`/repos/${REPO}/actions/variables/SCF_RUNNING`).catch(() => null),
+    ]);
+    const monitor = (wf.workflows || [])
+      .find((w) => (w.path || "").endsWith("monitor.yml"));
+    const monitorActive = monitor ? monitor.state === "active" : false;
+    const runningVar = !!(v && v.value === "true");
+    const enabledSlots = state.agentsDoc
+      ? Object.values(state.agentsDoc.slots || {})
+          .filter((s) => s && s.enabled).length
+      : 0;
+    const activeRuns = state.runs.some((r) =>
+      r.status === "in_progress" || r.status === "queued");
+    // Start is confirmed once anything real is up (workflows queue first)
+    if ((monitorActive || runningVar || activeRuns) && state.starting) {
+      state.starting = 0;
+    }
+    state.system = {
+      on: monitorActive || runningVar || enabledSlots > 0 || activeRuns,
+      starting: state.starting > 0 && Date.now() - state.starting < 180000,
+    };
   } catch (err) {
     console.warn("system status failed", err);
   }
@@ -491,7 +511,10 @@ function renderSystem() {
   const s = state.system;
   const pill = $("#syspill");
   if (!s || !pill) return;
-  if (s.on === true) {
+  if (s.starting) {
+    pill.className = "syspill starting";
+    pill.innerHTML = '<span class="dot"></span> Starting… · waiting for the runner queue';
+  } else if (s.on === true) {
     pill.className = "syspill on";
     pill.innerHTML = '<span class="dot"></span> System ON';
   } else if (s.on === false) {
@@ -503,7 +526,7 @@ function renderSystem() {
   }
   const start = $("#btn-start");
   const stop = $("#btn-stop");
-  if (start) start.disabled = s.on === true;
+  if (start) start.disabled = s.on === true || s.starting;
   if (stop) stop.disabled = s.on === false;
   const live = state.runs.filter((r) => r.status === "in_progress" || r.status === "queued").length;
   const count = $("#agent-count");
@@ -575,7 +598,7 @@ function slotRowHTML(slot) {
   } else if (run && run.status === "queued") {
     status = '<span class="pill pill-ip">Starting…</span>';
   } else if (enabled) {
-    status = '<span class="pill pill-ns">Enabled · waiting for the monitor tick</span>';
+    status = '<span class="pill pill-ns">On · waiting for a live channel</span>';
   } else {
     status = '<span class="pill pill-ns">Stopped</span>';
   }
@@ -725,7 +748,19 @@ document.addEventListener("click", async (event) => {
       }
       if (on) {
         state.stopping.clear();
+        state.starting = Date.now();
+        // dispatch enabled slots directly so rows light up in seconds
+        // (the monitor nurse remains the 10-minute fallback)
+        const doc = state.agentsDoc ? state.agentsDoc.slots || {} : {};
+        for (const slot of Object.keys(SLOT_PLATFORM)) {
+          if (!doc[slot] || !doc[slot].enabled) continue;
+          if (state.runs.some((r) => r.slot === slot)) continue;
+          state.runs.push({ slot, platform: SLOT_PLATFORM[slot], channel: "",
+            status: "queued", id: 0, created: new Date().toISOString() });
+          dispatchCapture(SLOT_PLATFORM[slot], slot).catch(() => {});
+        }
       } else {
+        state.starting = 0;
         for (const r of state.runs) {
           try { await cancelRun(r.id); } catch { /* best effort */ }
         }
@@ -735,8 +770,11 @@ document.addEventListener("click", async (event) => {
       // commit agents.json too (stop.yml/start.yml also do it server-side)
       commitAgents(on).catch(() => {});
       toast(on ? "Start dispatched — enabled slots are coming up" : "Stop dispatched — agents are being cancelled", "ok");
-      setTimeout(() => loadSystem().catch(() => {}), 4000);
-      setTimeout(() => loadAgents().then(render).catch(() => {}), 8000);
+      // staged rechecks — workflows queue on free runners, so confirm slowly
+      for (const ms of [5000, 15000, 35000, 75000]) {
+        setTimeout(() => Promise.all([loadSystem(), loadAgents()])
+          .then(render).catch(() => {}), ms);
+      }
     } catch (err) {
       state.system = null;
       toast(`Failed: ${err.message}`, "err");

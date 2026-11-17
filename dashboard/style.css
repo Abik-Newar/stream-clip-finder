@@ -74,6 +74,9 @@ button:active { transform: scale(0.98); }
 .syspill.on { color: var(--text); border-color: rgba(46, 160, 67, 0.5); }
 .syspill.on .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
 .syspill.off .dot { background: var(--danger); }
+.syspill.starting { color: #f5c518; border-color: #f5c51855; }
+.syspill.starting .dot { background: #f5c518; animation: blink 1.1s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: 0.25; } }
 .agentchip {
   display: none;
   border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
