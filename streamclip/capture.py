@@ -174,7 +174,9 @@ def run(platform, channel, opts: Options, channels=None) -> int:
         name = f"{safe_channel}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.mp4"
         out = run_dir / name
         try:
-            clipper.cut_clip(seg_dir, rel_start, rel_end, opts.segment_time, out)
+            out, actual_dur = clipper.cut_clip(
+                seg_dir, rel_start, rel_end, opts.segment_time, out,
+                max_duration=opts.max_clip_seconds)
         except Exception as exc:
             log.warning("clip cut failed: %s", exc)
             return
@@ -192,18 +194,18 @@ def run(platform, channel, opts: Options, channels=None) -> int:
                  "title": title, "score": round(score_val, 2),
                  "trigger": trigger,
                  "stream_t": [round(rel_start, 1), round(rel_end, 1)],
-                 "duration": round(rel_end - rel_start, 1),
+                 "duration": round(actual_dur, 1),
                  "created": datetime.now(timezone.utc).isoformat()}
         upload.append_manifest(manifest, entry)
         if opts.no_upload:
-            log.info("kept %s (%.0fs, %s)", out, rel_end - rel_start, trigger)
+            log.info("kept %s (%.0fs, %s)", out, actual_dur, trigger)
             return
         try:
             dest = upload.upload_clip(out, channel,
                                       opts.drive_remote, opts.drive_folder)
             upload.upload_manifest(manifest, channel,
                                    opts.drive_remote, opts.drive_folder)
-            log.info("uploaded %s → %s", name, dest)
+            log.info("uploaded %s (%.0fs, %s) → %s", name, actual_dur, trigger, dest)
         except Exception as exc:
             log.error("upload failed: %s (clip kept at %s)", exc, out)
 

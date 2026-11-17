@@ -66,15 +66,55 @@ def snap_to_cuts(segments_dir, rel_start, rel_end, seg_time,
     return rel_start, rel_end
 
 
-def cut_clip(segments_dir, rel_start, rel_end, seg_time, out_path):
-    """Concatenate segments covering stream-relative [rel_start, rel_end] and
-    re-encode to MP4. Segment i covers [(i-1)*seg_time, i*seg_time)."""
+def probe_duration(path):
+    """Actual duration of a media file in seconds (0.0 if unknown)."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=60)
+        if r.returncode == 0 and r.stdout.strip():
+            return float(r.stdout.strip())
+    except Exception:
+        pass
+    # ffprobe may be missing — fall back to ffmpeg's duration line
+    try:
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path),
+                            "-f", "null", "-"],
+                           capture_output=True, text=True, timeout=120)
+        m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr or "")
+        if m:
+            h, mi, s = m.groups()
+            return int(h) * 3600 + int(mi) * 60 + float(s)
+    except Exception:
+        pass
+    return 0.0
+
+
+def cut_clip(segments_dir, rel_start, rel_end, seg_time, out_path,
+             max_duration=90.0):
+    """Cut exactly [rel_start, rel_end] (stream-relative) and re-encode to MP4.
+
+    Segment i covers [(i-1)*seg_time, i*seg_time). Exact boundaries are
+    applied with concat-demuxer inpoint/outpoint so the result matches the
+    requested span (no 10 s segment slack), and `max_duration` is enforced
+    afterwards so a clip can never exceed the hard cap.
+    """
     files = _segment_range(segments_dir, rel_start, rel_end, seg_time)
     if not files:
         raise FileNotFoundError("no segments found in the clip range")
 
+    out_path = Path(out_path)
     list_file = out_path.with_suffix(".txt")
-    list_file.write_text("".join(f"file '{f.resolve()}'\n" for f in files))
+    lines = []
+    for f in files:
+        fs = (int(f.stem.split("_")[1]) - 1) * seg_time
+        lines.append(f"file '{f.resolve()}'")
+        if fs < rel_start:                      # trim the head of the first file
+            lines.append(f"inpoint {rel_start - fs:.3f}")
+        if fs + seg_time > rel_end:            # trim the tail of the last file
+            lines.append(f"outpoint {min(seg_time, max(0.0, rel_end - fs) + 0.4):.3f}")
+    list_file.write_text("\n".join(lines) + "\n")
 
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
            "-f", "concat", "-safe", "0", "-i", str(list_file),
@@ -85,4 +125,17 @@ def cut_clip(segments_dir, rel_start, rel_end, seg_time, out_path):
         subprocess.run(cmd, check=True, timeout=900)
     finally:
         list_file.unlink(missing_ok=True)
-    return out_path
+
+    # Hard duration guarantee
+    dur = probe_duration(out_path)
+    if dur > max_duration + 1.0:
+        trimmed = out_path.with_name(out_path.stem + "_t.mp4")
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-i", str(out_path), "-t", f"{max_duration:.3f}",
+             "-c", "copy", "-avoid_negative_ts", "make_zero",
+             "-movflags", "+faststart", str(trimmed)],
+            check=True, timeout=300)
+        trimmed.replace(out_path)
+        dur = probe_duration(out_path)
+    return out_path, dur
