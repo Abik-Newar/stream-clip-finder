@@ -1,8 +1,5 @@
 {
   "slots": {
-    "f": {
-      "enabled": true
-    },
     "twitch-1": {
       "enabled": true
     },
