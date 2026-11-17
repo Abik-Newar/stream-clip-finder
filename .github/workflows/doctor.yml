@@ -45,9 +45,13 @@ jobs:
 
       - name: Platform reachability
         run: |
+          echo "=== KICK rachitroo_1 (yt-dlp) ==="
+          yt-dlp -g -f "bv*+ba/b" --no-warnings "https://kick.com/rachitroo_1" 2>&1 | tail -3
+          echo "=== KICK chatroom (API) ==="
+          curl -s --max-time 20 -A "Mozilla/5.0 Chrome/120" \
+            "https://kick.com/api/v2/channels/rachitroo_1" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); lv=d.get('livestream') or {}; print('live:', bool(lv), '| chatroom:', (d.get('chatroom') or {}).get('id'), '| viewers:', d.get('viewer_count'))" 2>&1 | tail -2
           echo "=== YOUTUBE (yt-dlp) ==="
           yt-dlp -g -f "bv*+ba/b" --no-warnings "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -4
           echo "=== TWITCH (streamlink) ==="
-          streamlink --json "https://twitch.tv/shroud" 2>&1 | tail -3
-          echo "=== KICK (yt-dlp) ==="
-          yt-dlp -g -f "bv*+ba/b" --no-warnings "https://kick.com/trainwreckstv" 2>&1 | tail -4
+          streamlink --json "https://twitch.tv/rachitroo_1" 2>&1 | tail -3

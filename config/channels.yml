@@ -26,6 +26,9 @@ channels:
 
   # --- Kick: picked up automatically whenever they are live ---
   - platform: kick
+    name: rachitroo_1
+    enabled: true
+  - platform: kick
     name: xqc
     enabled: true
   - platform: kick
