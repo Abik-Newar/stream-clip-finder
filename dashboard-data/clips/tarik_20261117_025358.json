@@ -5,11 +5,11 @@
   "done_at": null,
   "drive_id": null,
   "drive_path": "gdrive:StreamClips/tarik/2026-11-17/tarik_20261117_025358.mp4",
-  "duration": 22.0,
+  "duration": 22,
   "file": "tarik_20261117_025358.mp4",
   "platform": "twitch",
   "score": 2.63,
-  "starred": false,
+  "starred": true,
   "status": "not_started",
   "stream_t": [
     527.1,
