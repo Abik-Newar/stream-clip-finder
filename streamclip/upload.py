@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,8 +28,35 @@ def append_manifest(manifest_path, entry: dict):
 
 
 def upload_manifest(manifest_path, channel, remote="gdrive", folder="StreamClips"):
+    """Merge-upload the manifest: concurrent runs and repeat uploads must not
+    clobber each other's rows (merge by clip key on the remote copy)."""
     if not rclone_ready():
         return
     dest = f"{remote}:{folder}/{channel}/manifest.jsonl"
-    subprocess.run(["rclone", "copyto", str(manifest_path), dest],
-                   check=False, timeout=300)
+    merged = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        remote_copy = tmpdir / "remote.jsonl"
+        r = subprocess.run(["rclone", "copyto", dest, str(remote_copy)],
+                           capture_output=True, timeout=300)
+        if r.returncode == 0 and remote_copy.exists():
+            for line in remote_copy.read_text(encoding="utf-8").splitlines():
+                try:
+                    row = json.loads(line)
+                    key = Path(row.get("file", line[:16])).stem
+                    merged[key] = row
+                except (ValueError, IndexError):
+                    continue
+        try:
+            for line in Path(manifest_path).read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    merged[Path(row.get("file", line[:16])).stem] = row
+        except OSError:
+            pass
+        out = tmpdir / "merged.jsonl"
+        out.write_text(
+            "\n".join(json.dumps(merged[k], ensure_ascii=False)
+                      for k in sorted(merged)) + "\n", encoding="utf-8")
+        subprocess.run(["rclone", "copyto", str(out), dest],
+                       check=False, timeout=300)

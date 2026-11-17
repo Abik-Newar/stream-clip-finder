@@ -1,12 +1,14 @@
-"""Backfill the dashboard from Drive manifests.
+"""Backfill the dashboard directly from the clip files on Drive.
 
-Reads gdrive:StreamClips/<channel>/manifest.jsonl (the manifest lives at the
-channel root) and publishes a dashboard-data/clips/<clip_key>.json row for
-every clip that does not have one yet. Clips themselves live in a date
-subfolder derived from the entry's `created` timestamp.
+Enumerates gdrive:StreamClips/<channel>/<date>/*.mp4 with `rclone lsf`
+(manifests are unreliable: each capture run overwrites the channel
+manifest) and:
+
+1. publishes a dashboard row for every clip file that has no row yet,
+2. fills in the missing drive_id (share link) for rows that have none.
 
 Usage (workflow or local with rclone configured):
-    python -m streamclip.backfill --channel tarik --date 2026-11-17
+    python -m streamclip.backfill --channel tarik --date all
 """
 
 import argparse
@@ -17,52 +19,121 @@ import tempfile
 from pathlib import Path
 
 from . import upload as up
-from .dashboard import publish_clip
+from .dashboard import (API, DATA_DIR, _request, _token, drive_file_id,
+                        publish_clip, put_file)
 
 log = logging.getLogger("backfill")
 
+# channel → platform is not stored on Drive; the workflow passes it or we
+# default to twitch. Platform is cosmetic (a badge), so a wrong default is
+# harmless — override with --platform when needed.
 
-def fetch_manifest(channel: str, remote: str, folder: str) -> list[dict]:
+
+def list_clip_files(channel: str, date: str, remote: str, folder: str) -> dict:
+    """Return {file_name: (relative_path, modtime)} for a channel's clips."""
     if not up.rclone_ready():
         raise RuntimeError("rclone/config missing")
-    src = f"{remote}:{folder}/{channel}/manifest.jsonl"
+    base = f"{remote}:{folder}/{channel}"
     with tempfile.TemporaryDirectory() as tmp:
-        dst = Path(tmp) / "manifest.jsonl"
-        subprocess.run(["rclone", "copyto", src, str(dst)], check=True, timeout=300)
-        entries = []
-        for line in dst.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-        return entries
+        listing = Path(tmp) / "ls.txt"
+        cmd = ["rclone", "lsf", base, "--files-only", "-R",
+               "--format", "tp", "--separator", "|", "--include", "*.mp4"]
+        with open(listing, "w") as fh:
+            subprocess.run(cmd, stdout=fh, check=True, timeout=300)
+        files = {}
+        for line in listing.read_text(encoding="utf-8").splitlines():
+            parts = line.strip().split("|", 1)
+            if len(parts) != 2:
+                continue
+            modtime, relpath = parts
+            name = Path(relpath).name
+            if date != "all" and not relpath.startswith(f"{date}/"):
+                continue
+            files[name] = (relpath, modtime)
+        return files
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Backfill dashboard rows from Drive")
     ap.add_argument("--channel", required=True)
     ap.add_argument("--date", default="all", help="YYYY-MM-DD filter, or 'all'")
+    ap.add_argument("--platform", default="twitch",
+                    help="platform badge for new rows (twitch|kick|youtube)")
     ap.add_argument("--remote", default="gdrive")
     ap.add_argument("--folder", default="StreamClips")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+    token = _token()
+    if not token:
+        log.error("no token available")
+        return 1
+    repo = _repo_env()
 
     try:
-        entries = fetch_manifest(args.channel, args.remote, args.folder)
+        files = list_clip_files(args.channel, args.date, args.remote, args.folder)
     except Exception as exc:
-        log.error("manifest fetch failed: %s", exc)
+        log.error("drive listing failed: %s", exc)
         return 1
+    log.info("%s clip files on Drive for %s", len(files), args.channel)
 
-    def entry_date(entry):
-        return (entry.get("created") or "")[:10]
+    # existing dashboard rows for this channel
+    status, entries = _request("GET", f"{API}/repos/{repo}/contents/{DATA_DIR}", token)
+    existing = {}
+    if status == 200 and isinstance(entries, list):
+        for item in entries:
+            name = item.get("name", "")
+            if not name.endswith(".json"):
+                continue
+            _, raw = _request(
+                "GET", f"{API}/repos/{repo}/contents/{DATA_DIR}/{name}", token,
+                accept="application/vnd.github.raw+json")
+            try:
+                doc = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if doc.get("channel") == args.channel:
+                existing[doc.get("file", name[:-5] + ".mp4")] = {
+                    "name": name, "sha": item["sha"], "doc": doc}
 
-    picked = [e for e in entries
-              if args.date == "all" or entry_date(e) == args.date]
-    log.info("%s of %s manifest entries match date filter", len(picked), len(entries))
-    for entry in picked:
-        date = entry_date(entry) or "unknown-date"
-        publish_clip(entry, f"{args.remote}:{args.folder}/{args.channel}/{date}")
+    published = refreshed = 0
+    for file_name, (relpath, modtime) in sorted(files.items()):
+        key = Path(file_name).stem
+        drive_path = f"{args.remote}:{args.folder}/{args.channel}/{relpath}"
+        drive_path = drive_path[: -len(file_name)]  # folder containing the file
+        full_file_path = f"{args.remote}:{args.folder}/{args.channel}/{relpath}"
+        if key in existing:
+            doc = existing[key]["doc"]
+            if not doc.get("drive_id"):
+                fid = drive_file_id(full_file_path)
+                if fid:
+                    doc["drive_id"] = fid
+                    put_file(repo, f"{DATA_DIR}/{existing[key]['name']}",
+                             json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                             f"clip: {key} link", token)
+                    refreshed += 1
+            continue
+        entry = {
+            "platform": args.platform,
+            "channel": args.channel,
+            "file": file_name,
+            "score": 0,
+            "trigger": "backfilled (no live scoring data)",
+            "stream_t": None,
+            "duration": 0,
+            "created": modtime or None,
+        }
+        publish_clip(entry, drive_path)
+        published += 1
+
+    log.info("backfill done: %s new rows, %s rows given a Drive link",
+             published, refreshed)
     return 0
+
+
+def _repo_env() -> str:
+    import os
+    return os.environ.get("GITHUB_REPOSITORY", "Abik-Newar/stream-clip-finder")
 
 
 if __name__ == "__main__":

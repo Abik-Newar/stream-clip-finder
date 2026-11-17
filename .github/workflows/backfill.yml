@@ -10,8 +10,13 @@ on:
         description: "Channel name"
         required: true
       date:
-        description: "UTC date of the captures (YYYY-MM-DD)"
-        required: true
+        description: "UTC date (YYYY-MM-DD) or 'all'"
+        required: false
+        default: "all"
+      platform:
+        description: "twitch | kick | youtube (badge for new rows)"
+        required: false
+        default: "twitch"
 
 permissions:
   contents: write
@@ -32,6 +37,6 @@ jobs:
           echo "${{ secrets.GDRIVE_RCLONE_CONF }}" | base64 -d > ~/.config/rclone/rclone.conf
           chmod 600 ~/.config/rclone/rclone.conf
       - name: Backfill dashboard rows
-        run: python -m streamclip.backfill --channel "${{ inputs.channel }}" --date "${{ inputs.date }}"
+        run: python -m streamclip.backfill --channel "${{ inputs.channel }}" --date "${{ inputs.date }}" --platform "${{ inputs.platform || 'twitch' }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
