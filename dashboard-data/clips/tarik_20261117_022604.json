@@ -1,0 +1,19 @@
+{
+  "channel": "tarik",
+  "clip_key": "tarik_20261117_022604",
+  "created_at": "2026-11-17T02:26:32.178477+00:00",
+  "done_at": null,
+  "drive_id": null,
+  "drive_path": "gdrive:StreamClips/tarik/2026-11-17/tarik_20261117_022604.mp4",
+  "duration": 38.5,
+  "file": "tarik_20261117_022604.mp4",
+  "platform": "twitch",
+  "score": 99.0,
+  "starred": false,
+  "status": "not_started",
+  "stream_t": [
+    1645.7,
+    1683.7
+  ],
+  "trigger": "clip command (chat)"
+}
