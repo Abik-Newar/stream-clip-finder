@@ -15,7 +15,10 @@ permissions:
 
 jobs:
   check:
-    # Master switch: skipped entirely when the system is stopped
+    # Master switch = this workflow's enabled state.
+    # The START/STOP workflows enable/disable it (one click in the Actions tab).
+    # Optional extra: set the repo variable SCF_RUNNING=false in
+    # Settings > Actions > Variables to freeze the scheduler without stopping it.
     if: vars.SCF_RUNNING != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
