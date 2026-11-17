@@ -14,25 +14,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: Turn the system off and cancel running agents
         # set +e: every step is best-effort — STOP must never fail halfway
         run: |
           set +e
+          REPO="${{ github.repository }}"
           echo "-> disabling the monitor scheduler"
-          gh workflow disable monitor.yml || echo "   (monitor was already disabled)"
+          gh workflow disable monitor.yml --repo "$REPO" \
+            || echo "   (needs admin perms — the master switch below still governs)"
           echo "-> clearing the master switch"
-          gh variable set SCF_RUNNING --body "false" || echo "   (variable not permitted — workflow disable still governs)"
+          gh variable set SCF_RUNNING --body "false" --repo "$REPO" \
+            || echo "   (variable not permitted — set it in Settings > Actions > Variables)"
           echo "-> cancelling running capture agents"
-          ids=$(gh run list --workflow capture.yml --limit 60 \
+          ids=$(gh run list --workflow capture.yml --repo "$REPO" --limit 60 \
                  --json databaseId,status \
                  --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId' 2>/dev/null)
           n=0
           for id in $ids; do
-            if gh run cancel "$id" >/dev/null 2>&1; then
+            if gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1; then
               echo "   cancelled run $id"
               n=$((n+1))
             fi
           done
           echo "■ SYSTEM OFF — scheduler disabled, $n capture agent(s) cancelled"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}

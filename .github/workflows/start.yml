@@ -15,19 +15,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: Turn the system on
         run: |
           set +e
+          REPO="${{ github.repository }}"
           echo "-> enabling the monitor scheduler"
-          gh workflow enable monitor.yml || echo "   (already enabled)"
+          gh workflow enable monitor.yml --repo "$REPO" \
+            || echo "   (needs admin perms — the master switch below still governs)"
           echo "-> setting the master switch"
-          gh variable set SCF_RUNNING --body "true" || echo "   (variable not permitted — workflow enable still governs)"
+          gh variable set SCF_RUNNING --body "true" --repo "$REPO" \
+            || echo "   (variable not permitted — set it in Settings > Actions > Variables)"
           sleep 5
           echo "-> running an immediate channel check"
-          if gh workflow run monitor.yml; then
+          if gh workflow run monitor.yml --repo "$REPO"; then
             echo "▶ SYSTEM ON — agents will spin up for live channels"
           else
             echo "   (monitor dispatch failed)"
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
