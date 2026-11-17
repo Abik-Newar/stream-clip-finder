@@ -27,6 +27,55 @@ the pool (`max_concurrent`, default 6) has capacity.
 
 ---
 
+## ClipDesk — the browser dashboard (PWA)
+
+A static admin dashboard ships in `dashboard/` and deploys to GitHub Pages
+automatically (`pages.yml`). Live at:
+
+**https://abik-newar.github.io/stream-clip-finder/**
+
+Installable as a homescreen app (Android: ⋮ → Install app; iOS: Share → Add
+to Home Screen).
+
+```
+agent cuts a clip ──► Google Drive (video, permanent)
+                  └─► dashboard-data/clips/<clip>.json  (tiny task row, in-repo)
+                              │
+   browser (ClipDesk) ────────┘  GitHub API = the backend, no server needed
+```
+
+| Feature | How it works |
+|---|---|
+| **Review tasks** | every pulled clip becomes a task: `not started → in progress / reviewing → done` |
+| **Star** | star a clip to bookmark it as your best; `★ Starred` filter |
+| **Archive lifecycle** | `done` leaves the board and is kept for **3 days** (restorable as *not started*), then the monitor purges the row permanently — the video stays in Drive either way |
+| **Watch** | plays from Google Drive in a modal (share link created automatically per clip) |
+| **Start/Stop** | one click — dispatches `start.yml` / `stop.yml` via the GitHub API; live agent count shown in the header |
+| **Auto-refresh** | polls the repo every 20 s; new clips appear as tasks automatically |
+
+### Admin access (3 admins, no one else)
+
+The dashboard is a static page; **GitHub itself is the gate**:
+
+1. Add your 3 admins as **collaborators** on this repo (Settings → Collaborators).
+2. Each admin opens the dashboard and pastes a **fine-grained GitHub token**
+   (repo access limited to this repo; permissions: Actions read+write,
+   Contents read+write). The login screen has step-by-step instructions.
+3. The token is validated against push access and stored **only in that
+   admin's browser**. No token, no data — the clip rows are not browsable
+   without it.
+
+Notes:
+- Clip **videos** live in Drive behind auto-created share links ("anyone with
+  the link"). Keep that in mind for private streams; deleting the Drive file
+  or unsharing removes playback.
+- `backfill.yml` (dispatch with channel + date) re-publishes dashboard rows
+  for clips captured before the dashboard existed.
+- Everything in `dashboard-data/` is metadata (names, scores, timestamps) —
+  no video bytes are stored in the repo.
+
+---
+
 ## How clip detection works (research summary)
 
 Built on how production clippers work (Eklipse, VoXCluTcH, HotClip, ClipMe)

@@ -20,8 +20,8 @@ on:
         default: ""
 
 permissions:
+  contents: write
   actions: write
-  contents: read
 
 jobs:
   capture:

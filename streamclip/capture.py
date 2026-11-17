@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import audio, clipper, livecheck, score as scoring, transcribe, upload
+from . import audio, clipper, dashboard, livecheck, score as scoring, transcribe, upload
 from .ai import rank_clip
 from .chat import make_chat
 from .config import Options, load_config
@@ -286,6 +286,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
             upload.upload_manifest(manifest, channel,
                                    opts.drive_remote, opts.drive_folder)
             log.info("uploaded %s (%.0fs, %s) → %s", name, actual_dur, reason, dest)
+            dashboard.publish_clip(entry, dest)
         except Exception as exc:
             log.error("upload failed: %s (clip kept at %s)", exc, out)
 

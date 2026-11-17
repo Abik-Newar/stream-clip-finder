@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
@@ -32,5 +32,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Check channels and dispatch captures
         run: python -m streamclip.monitor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Purge dashboard tasks older than 3 days
+        run: python -m streamclip.dashboard_cleanup
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

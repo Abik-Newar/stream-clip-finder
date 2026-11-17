@@ -1,0 +1,37 @@
+name: backfill
+run-name: dashboard backfill
+
+# Publishes dashboard rows for clips that were uploaded to Drive before the
+# dashboard existed (or whose publish failed). Dispatch with channel+date.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Channel name"
+        required: true
+      date:
+        description: "UTC date of the captures (YYYY-MM-DD)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install rclone + restore config
+        run: |
+          sudo apt-get install -y -qq rclone
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.GDRIVE_RCLONE_CONF }}" | base64 -d > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+      - name: Backfill dashboard rows
+        run: python -m streamclip.backfill --channel "${{ inputs.channel }}" --date "${{ inputs.date }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
