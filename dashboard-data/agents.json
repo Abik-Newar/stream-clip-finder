@@ -1,31 +1,34 @@
 {
   "slots": {
+    "f": {
+      "enabled": true
+    },
     "twitch-1": {
-      "enabled": false
+      "enabled": true
     },
     "twitch-2": {
-      "enabled": false
+      "enabled": true
     },
     "twitch-3": {
-      "enabled": false
+      "enabled": true
     },
     "kick-1": {
-      "enabled": false
+      "enabled": true
     },
     "kick-2": {
-      "enabled": false
+      "enabled": true
     },
     "kick-3": {
-      "enabled": false
+      "enabled": true
     },
     "youtube-1": {
-      "enabled": false
+      "enabled": true
     },
     "youtube-2": {
-      "enabled": false
+      "enabled": true
     },
     "youtube-3": {
-      "enabled": false
+      "enabled": true
     }
   }
 }
