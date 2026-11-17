@@ -28,11 +28,12 @@ def _run_list_json():
 
 
 def _channel_busy(runs, platform, channel) -> bool:
-    marker = f"clip-capture-{platform}-{channel}"
+    """A live capture run whose title claims this channel."""
+    marker = f"clip-capture|{platform}|{channel}"
     for run in runs:
         title = (run.get("displayTitle") or "")
         status = (run.get("status") or "")
-        if title.startswith(marker) and status in ("in_progress", "queued"):
+        if title == marker and status in ("in_progress", "queued"):
             return True
     return False
 

@@ -1,8 +1,10 @@
 name: capture
-run-name: clip-capture-${{ inputs.platform }}-${{ inputs.channel }}
+run-name: clip-capture|${{ inputs.platform }}|${{ inputs.channel }}
 
-# One capture job per live channel. `run-name` doubles as the marker the
-# monitor uses to avoid dispatching duplicates.
+# One capture agent. It monitors its assigned channel until that live ends,
+# then automatically switches to the next live channel from the pool.
+# The run title is the agent's claim — other agents read it to avoid
+# capturing the same stream.
 on:
   workflow_dispatch:
     inputs:
@@ -17,9 +19,9 @@ on:
         required: false
         default: ""
 
-concurrency:
-  group: clip-capture-${{ inputs.platform }}-${{ inputs.channel }}
-  cancel-in-progress: false
+permissions:
+  actions: write
+  contents: read
 
 jobs:
   capture:
@@ -61,3 +63,5 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCF_THRESHOLD: ${{ inputs.threshold }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

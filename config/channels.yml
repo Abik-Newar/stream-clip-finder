@@ -1,14 +1,19 @@
-# Channels to watch. platform: twitch | kick | youtube
-# For youtube, name is a @handle or UC… channel id (the /live stream is used).
-# Each live channel becomes its own capture agent; up to `max_concurrent`
-# agents run at the same time (default 6).
+# Channel pool. The agents take channels from this list in priority order.
 #
-# Per-channel kill switch: set `enabled: false` to keep the entry but skip it.
-# The whole system has a one-click START/STOP in the Actions tab (start.yml /
-# stop.yml) — agents never run unless the system is started.
+# HOW IT WORKS
+#   • The monitor dispatches one capture agent per live channel (up to
+#     max_concurrent).
+#   • Each agent monitors its channel for the WHOLE live. When that live
+#     ends, the agent automatically switches to the next live channel in this
+#     list and keeps going — nothing needs to be restarted by hand.
+#   • Agents claim channels via their workflow-run title, so two agents never
+#     capture the same stream.
+#   • `enabled: false` takes a channel out of rotation without deleting it.
+#
+# Add your real channels below — top of the list = highest priority.
 
 channels:
-  # --- live test channels (verified live + extractable from runner IPs) ---
+  # --- Twitch (live right now, good for testing) ---
   - platform: twitch
     name: jynxzi
     enabled: true
@@ -19,11 +24,19 @@ channels:
     name: nightblue3
     enabled: true
 
-  # - platform: twitch
-  #   name: some_channel
-  #   enabled: true
+  # --- Kick: picked up automatically whenever they are live ---
+  - platform: kick
+    name: xqc
+    enabled: true
+  - platform: kick
+    name: trainwreckstv
+    enabled: true
+  - platform: kick
+    name: iceposeidon
+    enabled: true
+
   # - platform: youtube
-  #   name: "@handle"      # needs the YT_COOKIES secret (bot-check)
+  #   name: "@handle"      # YouTube needs the YT_COOKIES secret (bot-check)
 
 options:
   # Clip geometry — clips are always strictly under 90 seconds
@@ -35,13 +48,20 @@ options:
   segment_time: 10       # internal recording chunk size
 
   # Detection — see README "How clip detection works"
-  threshold: 2.5         # combined hype z-score that triggers a clip
+  threshold: 2.5         # fused hype z-score a peak must reach
   cooldown: 90           # minimum seconds between clips
   window: 60             # scoring window (seconds)
   baseline: 900          # rolling baseline window (seconds)
   min_uptime: 120        # ignore the first N seconds of a capture
   clip_command_trigger: true   # "clip it" chat spam / streamer voice command
   scene_snap: true       # snap clip boundaries to visual scene cuts
+
+  # Peak selection (v3)
+  min_signals: 2         # independent signals that must agree
+  peak_prominence: 1.0   # how far a peak must stand out from its saddle
+  peak_min_distance: 30  # seconds between distinct peaks
+  pre_pad: 3             # context seconds before the spike
+  reaction_tail: 8       # post-play reaction seconds after the peak
 
   # Storage
   keep_buffer: 900       # seconds of segments kept on disk
