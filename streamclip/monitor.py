@@ -92,6 +92,16 @@ def main():
         return
     enabled = [s for s, cfg in slots.items() if cfg["enabled"]]
     print(f"slots: {len(enabled)} enabled, {len(running)} agents running")
+    # Respect options.max_concurrent (6): extra idle agents only burn the
+    # shared API quota polling claims for creators other agents already hold.
+    try:
+        from .config import load_config
+        _, opts = load_config()
+        cap = max(1, int(getattr(opts, "max_concurrent", 9)))
+    except Exception:
+        cap = 9
+    free_slots = max(0, cap - len(running))
+    print(f"max concurrent: {cap} — room for {free_slots} more")
     dispatched = 0
     for slot in sorted(slots):
         cfg = slots[slot]
@@ -105,6 +115,9 @@ def main():
         if slot in running:
             p, ch = running[slot]
             print(f"{slot}: running on {p}/{ch or 'auto'}")
+            continue
+        if dispatched >= free_slots:
+            print(f"{slot}: waiting (max concurrent {cap} reached)")
             continue
         if dispatched:
             # stagger starts: every agent commits a claim on startup, and a
