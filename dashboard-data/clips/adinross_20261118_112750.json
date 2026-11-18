@@ -1,0 +1,23 @@
+{
+  "caption": "Adinross reveals he's terrified of alligators, promising a shocking reveal. #AlligatorFear #AdinrossRants",
+  "channel": "adinross",
+  "clip_key": "adinross_20261118_112750",
+  "created_at": "2026-11-18T11:28:25.015350+00:00",
+  "done_at": null,
+  "drive_id": "1Dot4hdG2o67wanoA00BVbZYuK41HiDuq",
+  "drive_path": "gdrive:StreamClips/adinross/2026-11-18/adinross_20261118_112750.mp4",
+  "duration": 19.6,
+  "file": "adinross_20261118_112750.mp4",
+  "hashtags": "#AlligatorFear #AdinrossRants #CreepyStream",
+  "platform": "kick",
+  "quote": "Bro, I do not want to touch an alligator",
+  "score": 4.72,
+  "starred": false,
+  "status": "not_started",
+  "stream_t": [
+    217.4,
+    235.1
+  ],
+  "title": "Rude Alligator Threat",
+  "trigger": "audio z2.3, keywords z10.0"
+}
