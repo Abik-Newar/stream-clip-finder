@@ -4,7 +4,7 @@
   "candidates": 489,
   "channel": "abhi9av",
   "chat_connected": true,
-  "chat_messages": 343,
+  "chat_messages": 347,
   "clips": 2,
   "last_ai": "keep=True score=7.0",
   "last_candidate_score": 3.45,
@@ -12,10 +12,10 @@
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308153389",
-  "seconds": 3263,
-  "segments": 326,
+  "seconds": 3313,
+  "segments": 331,
   "slot": "kick-1",
   "state": "watching",
   "threshold": 2.78,
-  "updated": "2026-11-18T13:48:41.133953+00:00"
+  "updated": "2026-11-18T13:49:27.961929+00:00"
 }
