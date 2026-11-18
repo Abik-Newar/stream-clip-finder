@@ -1,0 +1,22 @@
+{
+  "caption": "Zodra's Metal Slug demo blew everyone away! #clips #gaming #streamer",
+  "channel": "xqc",
+  "clip_key": "xqc_20261118_073705",
+  "created_at": "2026-11-18T07:37:39.103045+00:00",
+  "done_at": null,
+  "drive_id": "1hSQi9_cEu6AnX5_ILSD_aUKsONxU30pF",
+  "drive_path": "gdrive:StreamClips/xqc/2026-11-18/xqc_20261118_073705.mp4",
+  "duration": 14.7,
+  "file": "xqc_20261118_073705.mp4",
+  "hashtags": "#clips #gaming #streamer",
+  "platform": "kick",
+  "score": 3.28,
+  "starred": false,
+  "status": "not_started",
+  "stream_t": [
+    357.7,
+    371.8
+  ],
+  "title": "Metal Slug Epic",
+  "trigger": "audio z1.5, keywords z7.1"
+}
