@@ -51,6 +51,7 @@ class Options:
     ai_ranking: bool = True        # open-source LLM (Ollama) judges + titles clips
     ai_min_score: float = 6.5      # 1-10 virality bar — below this the clip is dropped
     title_template: str = ""       # e.g. "🔥 {channel} — {title}" (empty = raw AI title)
+    brand_tag: str = "GTA6"        # forced into every title/caption/hashtag ("" = off)
 
     # Speed / resilience
     probe_timeout: int = 45        # seconds per channel live-check

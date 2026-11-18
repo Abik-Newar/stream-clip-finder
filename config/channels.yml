@@ -103,6 +103,7 @@ options:
   ai_ranking: true       # open-source LLM (Ollama on the runner) judges clips
   ai_min_score: 6.5      # 1-10 virality bar; below this the clip is dropped
   title_template: ""     # title format for every clip, e.g. "🔥 {channel} — {title}"
+  brand_tag: GTA6        # forced onto every clip: title, caption, #hashtag ("" = off)
 
   # Speed — pickup + idle patience
   probe_timeout: 45      # seconds per channel live-check

@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import audio, clipper, dashboard, livecheck, score as scoring, transcribe, upload
 from .ai import rank_clip
+from .brand import apply_brand
 from .chat import make_chat
 from .config import Options, load_config
 
@@ -689,13 +690,16 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             perf["whisper_wait"] = time.perf_counter() - mark - perf["cut"]
             mark = time.perf_counter()
             verdict = rank_clip(transcript_window(rel_start, rel_end),
-                                channel, platform, wait_s=15)
+                                channel, platform, wait_s=30)
             perf["ai"] = time.perf_counter() - mark
             if verdict is None:
                 if score_val < opts.threshold * opts.strong_factor:
                     out.unlink(missing_ok=True)
                     log.info("clip dropped: AI unavailable and signal %.2f is "
-                             "not strong enough (no bluff)", score_val)
+                             "not strong enough (no bluff) | peak→drop %.0fs "
+                             "(cut %.1fs, whisper %.1fs, AI %.1fs)", score_val,
+                             time.time() - peak_t, perf.get("cut", 0),
+                             perf.get("whisper_wait", 0), perf.get("ai", 0))
                     return
                 log.info("AI unavailable — keeping strong-signal clip")
             else:
@@ -706,8 +710,11 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                         vscore and vscore < opts.ai_min_score):
                     out.unlink(missing_ok=True)
                     log.info("AI rejected the clip (score %.1f < %.1f) — "
-                             "not interesting enough", vscore,
-                             opts.ai_min_score)
+                             "not interesting enough | peak→drop %.0fs "
+                             "(cut %.1fs, whisper %.1fs, AI %.1fs)",
+                             vscore, opts.ai_min_score, time.time() - peak_t,
+                             perf.get("cut", 0), perf.get("whisper_wait", 0),
+                             perf.get("ai", 0))
                     return
                 title = verdict.get("title")
                 caption = verdict.get("caption")
@@ -719,6 +726,10 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                     channel=channel, platform=platform, title=title)
             except (KeyError, IndexError, ValueError):
                 title = f"{title}"   # malformed template → keep the raw title
+        # Brand tag is forced onto every clip (title, caption, hashtags).
+        # The quote stays verbatim — it is evidence, not copy.
+        title = title or f"{channel} live moment"
+        caption = caption or f"{channel} live moment."
         entry = {"platform": platform, "channel": channel, "file": name,
                  "title": title, "caption": caption, "hashtags": hashtags,
                  "quote": quote,
@@ -727,6 +738,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                  "stream_t": [round(rel_start, 1), round(rel_end, 1)],
                  "duration": round(actual_dur, 1),
                  "created": datetime.now(timezone.utc).isoformat()}
+        apply_brand(entry, opts.brand_tag)
         upload.append_manifest(manifest, entry)
         if opts.no_upload:
             log.info("kept %s (%.0fs, %s)", out, actual_dur, reason)

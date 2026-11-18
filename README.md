@@ -241,11 +241,14 @@ python -m streamclip.capture --platform twitch --channel <name> --no-upload
 | `clip_command_trigger` | true | instant trigger on "clip it" (any language) |
 | `scene_snap` | true | snap boundaries to scene cuts |
 | `whisper_model` | small | `tiny` (fastest) → `small` (best for Hindi/Hinglish) |
+| `brand_tag` | GTA6 | forced into every title + caption + `#hashtag` (empty = off) |
 | `transcription` | true | set false for lowest CPU usage |
 | `max_concurrent` | 6 | parallel capture agents |
 
-The scorer needs ~5 minutes of warm-up (rolling baseline) before the first
-trigger, so very short streams won't produce clips.
+The scorer needs ~3–5 minutes of warm-up (rolling baseline) before the first
+trigger, and the local AI judge finishes pulling its model around the same
+time. Very short streams may not produce a clip, and candidates from the first
+few minutes are the most likely to be dropped.
 
 ## Honest limitations
 

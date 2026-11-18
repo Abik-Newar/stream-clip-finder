@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import dashboard, livecheck, upload
+from .brand import brand_hashtags, brand_text
+from .config import load_config
 
 
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -81,6 +83,7 @@ def main(argv=None) -> int:
         return 1
 
     safe = re.sub(r"[^\w-]+", "_", channel).strip("_") or "test"
+    _, opts = load_config()
     name = f"{safe}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.mp4"
     out_dir = Path("workdir") / "testclips"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,10 +106,10 @@ def main(argv=None) -> int:
         "platform": args.platform,
         "channel": channel,
         "file": name,
-        "title": f"TEST CLIP — {channel}",
-        "caption": (f"Pipeline test: {duration:.0f}s recorded live from "
-                    f"{args.platform}/{channel}."),
-        "hashtags": "#clips #test #streamer",
+        "title": brand_text(f"TEST CLIP — {channel}", opts.brand_tag, " | "),
+        "caption": brand_text(f"Pipeline test: {duration:.0f}s recorded live from "
+                              f"{args.platform}/{channel}.", opts.brand_tag, " — "),
+        "hashtags": brand_hashtags("#clips #test #streamer", opts.brand_tag),
         "quote": "Test clip — captured, uploaded and linked from the live stream.",
         "score": 1.0,
         "trigger": "manual pipeline test",
