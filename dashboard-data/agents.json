@@ -30,6 +30,10 @@
     "extra-4": {
       "enabled": true,
       "platform": "kick"
+    },
+    "extra-5": {
+      "enabled": true,
+      "platform": "kick"
     }
   }
 }
