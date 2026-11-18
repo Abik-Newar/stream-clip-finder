@@ -94,6 +94,8 @@ def put_file(repo: str, path: str, text: str, message: str, token: str) -> int:
 
 
 AGENT_STATE_DIR = "dashboard-data/agent-state"
+PROGRESS_DIR = "dashboard-data/live"
+_LAST_PROGRESS: dict[str, float] = {}
 OVERRIDE_DIR = "dashboard-data/override"
 
 # ETag cache: conditional contents-API GETs that answer 304 are FREE
@@ -203,6 +205,31 @@ def publish_agent_state(slot: str, platform: str, channel: str,
     except Exception as exc:
         log.warning("dashboard: agent state failed: %s", exc)
         return ""
+
+
+def write_progress(slot: str, doc: dict, min_gap: float = 45.0) -> None:
+    """Best-effort live status for an in-flight agent.
+
+    Actions only exposes a run's log after it finishes, so a stuck capture
+    used to be invisible. This commits ~one tiny file per minute with the
+    counters that matter (segments, candidates, accepted, AI verdict, chat)
+    so the board owner can see exactly where a clip is. Never raises."""
+    try:
+        token = _token()
+        if not token or not slot:
+            return
+        now = time.time()
+        if min_gap and now - _LAST_PROGRESS.get(slot, 0) < min_gap:
+            return
+        _LAST_PROGRESS[slot] = now
+        status = put_file(
+            _repo(), f"{PROGRESS_DIR}/{slot}.json",
+            json.dumps(doc, indent=2, sort_keys=True) + "\n",
+            f"live: {slot} status", token)
+        if status not in (200, 201):
+            log.info("dashboard: progress %s → HTTP %s", slot, status)
+    except Exception as exc:
+        log.info("dashboard: progress failed: %s", exc)
 
 
 def _update_claim(slot: str, message: str, make_doc, allow=None) -> bool:

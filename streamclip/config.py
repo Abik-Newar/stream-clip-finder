@@ -18,8 +18,8 @@ class Options:
     segment_time: int = 10         # ffmpeg segment length (s)
 
     # Detection
-    threshold: float = 2.4         # fused hype z-score that a peak must reach
-    cooldown: int = 45             # min seconds between clips (diversity gap)
+    threshold: float = 2.2         # fused hype z-score that a peak must reach
+    cooldown: int = 30             # min seconds between clips (diversity gap)
     window: int = 60               # scoring window (s)
     baseline: int = 900            # rolling baseline window (s)
     min_uptime: int = 60           # ignore the first N seconds of a capture
@@ -27,15 +27,15 @@ class Options:
     scene_snap: bool = True        # snap cut points to visual scene cuts
 
     # Peak selection (v3)
-    min_signals: int = 2           # independent signals that must agree
+    min_signals: int = 1           # independent signals that must agree
     peak_prominence: float = 1.0   # how far a peak must stand out
     peak_min_distance: float = 30  # seconds between distinct peaks
     pre_pad: float = 3.0           # context seconds before the spike
-    reaction_tail: float = 8.0     # post-play reaction seconds after the peak
+    reaction_tail: float = 6.0     # post-play reaction seconds after the peak
 
     # Quality gates (v4) — only the BEST of a stream reaches the board
-    strong_factor: float = 1.3     # score ≥ this × threshold cuts immediately
-    grace_period: int = 20         # unbeaten "lull-best" waits this long, then cuts
+    strong_factor: float = 1.2     # score ≥ this × threshold cuts immediately
+    grace_period: int = 15         # unbeaten "lull-best" waits this long, then cuts
     max_per_hour: int = 8          # rolling-hour clip quota per channel
     threshold_floor: float = 2.0   # auto-calibration lower bound (quality floor)
     threshold_ceiling: float = 6.0 # auto-calibration upper bound

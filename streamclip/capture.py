@@ -598,7 +598,15 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
     scorer = scoring.Scorer(window=opts.window, baseline=opts.baseline)
     ring = deque(maxlen=300)
 
-    chat = make_chat(platform, channel, scorer.add_chat)
+    stats = {"chat_messages": 0, "candidates": 0, "accepted": 0,
+             "clips": 0, "last_score": None, "last_ai": None,
+             "last_clip": None, "last_error": None}
+
+    def _chat(at, user, text):
+        stats["chat_messages"] += 1
+        scorer.add_chat(at, user, text)
+
+    chat = make_chat(platform, channel, _chat)
     if chat:
         chat.start()
     else:
@@ -701,10 +709,13 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                              time.time() - peak_t, perf.get("cut", 0),
                              perf.get("whisper_wait", 0), perf.get("ai", 0))
                     return
+                stats["last_ai"] = "unavailable"
                 log.info("AI unavailable — keeping strong-signal clip")
             else:
                 vscore = float(verdict.get("score") or 0)
                 quote = (verdict.get("quote") or "").strip()
+                stats["last_ai"] = (f"keep={verdict.get('keep')} "
+                                    f"score={vscore:.1f}")
                 log.info("AI verdict: keep=%s score=%.1f quote=%r",
                          verdict.get("keep"), vscore, quote or None)
                 rejected = verdict.get("keep") is False or bool(
@@ -714,8 +725,9 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 # local judge shrugs. The gate exists to block BLUFFS — a clip
                 # with no quotable line — not loud, real moments. This is what
                 # turns "one clip an hour" into a flowing board.
-                strong = score_val >= opts.threshold * 1.4
+                strong = score_val >= opts.threshold * opts.strong_factor
                 if rejected and not (strong and quote):
+                    stats["last_error"] = f"AI rejected ({vscore:.1f})"
                     out.unlink(missing_ok=True)
                     log.info("AI rejected the clip (score %.1f < %.1f) — "
                              "not interesting enough | peak→drop %.0fs "
@@ -725,6 +737,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                              perf.get("ai", 0))
                     return
                 if rejected:
+                    stats["last_ai"] += " → override"
                     log.info("AI override: strong signal %.2f with a real "
                              "quote — keeping the clip", score_val)
                 title = verdict.get("title")
@@ -769,6 +782,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             # manifest merge (download + re-upload) is bookkeeping.
             dashboard.publish_clip(entry, dest)
             perf["publish"] = time.perf_counter() - mark
+            stats["clips"] += 1
+            stats["last_clip"] = name
             log.info("uploaded %s (%.0fs, %s) → %s", name, actual_dur, reason, dest)
             log.info("latency: peak→board %.0fs | wait %.0fs, cut %.1fs, "
                      "whisper %.1fs, AI %.1fs, upload %.1fs, publish %.1fs",
@@ -777,6 +792,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                      perf.get("ai", 0), perf.get("upload", 0),
                      perf.get("publish", 0))
         except Exception as exc:
+            stats["last_error"] = f"upload failed: {exc}"
             log.error("upload failed: %s (clip kept at %s)", exc, out)
             return
         # bookkeeping only — never let a manifest merge look like a failed clip
@@ -866,14 +882,37 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 reaction_tail=opts.reaction_tail,
                 min_clip=opts.min_clip_seconds,
                 max_clip=opts.max_clip_seconds)
+            stats["candidates"] += len(cands)
+            if cands:
+                stats["last_score"] = round(
+                    max(c["score"] for c in cands), 2)
             enough = last_idx * opts.segment_time >= opts.min_clip_seconds
             for cand in gate.observe(cands, now, enough):
+                stats["accepted"] += 1
                 pending.append((cand["clip"][0], cand["clip"][1],
                                 cand["score"], cand["reason"],
                                 cand["peak"], time.time()))
                 log.info("clip selected: %.2f | %s | %+.0fs..%+.0fs",
                          cand["score"], cand["reason"],
                          cand["clip"][0] - t0, cand["clip"][1] - t0)
+
+        # 4b) heartbeat — one tiny commit a minute, so a live run is visible
+        dashboard.write_progress(my_slot, {
+            "slot": my_slot, "platform": platform, "channel": channel,
+            "run_id": my_run_id, "state": "watching",
+            "updated": datetime.now(timezone.utc).isoformat(),
+            "seconds": round(now - t0), "segments": last_idx,
+            "chat_connected": bool(chat),
+            "chat_messages": stats["chat_messages"],
+            "threshold": round(opts.threshold, 2),
+            "candidates": stats["candidates"],
+            "accepted": stats["accepted"], "clips": stats["clips"],
+            "arena_score": round(gate.arena["score"], 2)
+                           if gate.arena else None,
+            "last_candidate_score": stats["last_score"],
+            "last_ai": stats["last_ai"], "last_clip": stats["last_clip"],
+            "last_error": stats["last_error"],
+        })
 
         # 5) did the live end?
         if reader is not None and reader.poll() is not None:
@@ -882,6 +921,18 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         if ffmpeg.poll() is not None:
             log.info("%s/%s live ended (ffmpeg closed)", platform, channel)
             break
+
+    dashboard.write_progress(my_slot, {
+        "slot": my_slot, "platform": platform, "channel": channel,
+        "run_id": my_run_id, "state": result,
+        "updated": datetime.now(timezone.utc).isoformat(),
+        "seconds": round(time.time() - t0), "segments": last_idx,
+        "chat_connected": bool(chat),
+        "chat_messages": stats["chat_messages"],
+        "candidates": stats["candidates"], "accepted": stats["accepted"],
+        "clips": stats["clips"], "last_ai": stats["last_ai"],
+        "last_clip": stats["last_clip"], "last_error": stats["last_error"],
+    }, min_gap=0)
 
     if result == "lost_claim":
         log.info("dropping %s buffered clip(s) — the rival agent owns this "
