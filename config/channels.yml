@@ -69,11 +69,11 @@ options:
   segment_time: 10       # internal recording chunk size
 
   # Detection — see README "How clip detection works"
-  threshold: 3.0         # fused hype z-score a peak must reach
-  cooldown: 120          # minimum seconds between clips (diversity gap)
+  threshold: 2.4         # fused hype z-score a peak must reach
+  cooldown: 45           # minimum seconds between clips (diversity gap)
   window: 60             # scoring window (seconds)
   baseline: 900          # rolling baseline window (seconds)
-  min_uptime: 120        # ignore the first N seconds of a capture
+  min_uptime: 60         # ignore the first N seconds of a capture
   clip_command_trigger: true   # "clip it" chat spam / streamer voice command
   scene_snap: true       # snap clip boundaries to visual scene cuts
 
@@ -85,9 +85,9 @@ options:
   reaction_tail: 8       # post-play reaction seconds after the peak
 
   # Quality gates (v4) — only the BEST of a stream reaches the board
-  strong_factor: 1.5     # score ≥ 1.5×threshold cuts instantly, no waiting
-  grace_period: 45       # a "lull-best" candidate must stay unbeaten this long
-  max_per_hour: 3        # rolling-hour clip quota per channel
+  strong_factor: 1.3     # score ≥ 1.3×threshold cuts instantly, no waiting
+  grace_period: 20       # a "lull-best" candidate must stay unbeaten this long
+  max_per_hour: 8        # rolling-hour clip quota per channel
   # Latency budget: peak → board must stay inside 3–5 min. Setup on a warm
   # runner is ~40 s; detection+grace ≤ ~60 s; AI ≤ ~25 s; upload ~10–30 s.
   threshold_floor: 2.0   # auto-calibration bounds (quiet decay / quota raise)
@@ -101,7 +101,7 @@ options:
                          # transcribes Hindi/Hinglish well; override with the
                          # repo variable WHISPER_MODEL if needed
   ai_ranking: true       # open-source LLM (Ollama on the runner) judges clips
-  ai_min_score: 6.5      # 1-10 virality bar; below this the clip is dropped
+  ai_min_score: 4.5      # 1-10 virality bar; below this the clip is dropped
   title_template: ""     # title format for every clip, e.g. "🔥 {channel} — {title}"
   brand_tag: GTA6        # forced onto every clip: title, caption, #hashtag ("" = off)
 

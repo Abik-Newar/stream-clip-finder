@@ -18,11 +18,11 @@ class Options:
     segment_time: int = 10         # ffmpeg segment length (s)
 
     # Detection
-    threshold: float = 3.0         # fused hype z-score that a peak must reach
-    cooldown: int = 120            # min seconds between clips (diversity gap)
+    threshold: float = 2.4         # fused hype z-score that a peak must reach
+    cooldown: int = 45             # min seconds between clips (diversity gap)
     window: int = 60               # scoring window (s)
     baseline: int = 900            # rolling baseline window (s)
-    min_uptime: int = 120          # ignore the first N seconds of a capture
+    min_uptime: int = 60           # ignore the first N seconds of a capture
     clip_command_trigger: bool = True  # "clip it" chat spam / voice commands
     scene_snap: bool = True        # snap cut points to visual scene cuts
 
@@ -34,9 +34,9 @@ class Options:
     reaction_tail: float = 8.0     # post-play reaction seconds after the peak
 
     # Quality gates (v4) — only the BEST of a stream reaches the board
-    strong_factor: float = 1.5     # score ≥ this × threshold cuts immediately
-    grace_period: int = 45         # unbeaten "lull-best" waits this long, then cuts
-    max_per_hour: int = 3          # rolling-hour clip quota per channel
+    strong_factor: float = 1.3     # score ≥ this × threshold cuts immediately
+    grace_period: int = 20         # unbeaten "lull-best" waits this long, then cuts
+    max_per_hour: int = 8          # rolling-hour clip quota per channel
     threshold_floor: float = 2.0   # auto-calibration lower bound (quality floor)
     threshold_ceiling: float = 6.0 # auto-calibration upper bound
     overlap_iou: float = 0.3       # max overlap allowed with a recent cut
@@ -49,7 +49,7 @@ class Options:
     transcription: bool = True
     whisper_model: str = "base"
     ai_ranking: bool = True        # open-source LLM (Ollama) judges + titles clips
-    ai_min_score: float = 6.5      # 1-10 virality bar — below this the clip is dropped
+    ai_min_score: float = 4.5      # 1-10 virality bar — below this the clip is dropped
     title_template: str = ""       # e.g. "🔥 {channel} — {title}" (empty = raw AI title)
     brand_tag: str = "GTA6"        # forced into every title/caption/hashtag ("" = off)
 

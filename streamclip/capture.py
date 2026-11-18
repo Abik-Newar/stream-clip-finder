@@ -704,10 +704,18 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 log.info("AI unavailable — keeping strong-signal clip")
             else:
                 vscore = float(verdict.get("score") or 0)
+                quote = (verdict.get("quote") or "").strip()
                 log.info("AI verdict: keep=%s score=%.1f quote=%r",
-                         verdict.get("keep"), vscore, verdict.get("quote"))
-                if verdict.get("keep") is False or (
-                        vscore and vscore < opts.ai_min_score):
+                         verdict.get("keep"), vscore, quote or None)
+                rejected = verdict.get("keep") is False or bool(
+                    vscore and vscore < opts.ai_min_score)
+                # Yield override: a genuinely strong signal (≥1.4×threshold)
+                # with a real transcribed quote is posted even when the 3B
+                # local judge shrugs. The gate exists to block BLUFFS — a clip
+                # with no quotable line — not loud, real moments. This is what
+                # turns "one clip an hour" into a flowing board.
+                strong = score_val >= opts.threshold * 1.4
+                if rejected and not (strong and quote):
                     out.unlink(missing_ok=True)
                     log.info("AI rejected the clip (score %.1f < %.1f) — "
                              "not interesting enough | peak→drop %.0fs "
@@ -716,10 +724,18 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                              perf.get("cut", 0), perf.get("whisper_wait", 0),
                              perf.get("ai", 0))
                     return
+                if rejected:
+                    log.info("AI override: strong signal %.2f with a real "
+                             "quote — keeping the clip", score_val)
                 title = verdict.get("title")
                 caption = verdict.get("caption")
                 hashtags = verdict.get("hashtags")
-                quote = verdict.get("quote")
+        # Never show a blank card: with no AI copy, use the verbatim quote.
+        if not title:
+            words = (quote or "").split()
+            title = " ".join(words[:8]) or f"{channel} live moment"
+        if not caption:
+            caption = quote or f"{channel} live moment."
         if title and opts.title_template:
             try:
                 title = opts.title_template.format(
