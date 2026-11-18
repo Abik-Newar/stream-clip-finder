@@ -364,20 +364,32 @@ async function commitAgents(on) {
 }
 
 async function dispatchCapture(platform, slot, channel = "", threshold = "") {
-  await gh(`/repos/${REPO}/actions/workflows/capture.yml/dispatches`, {
+  const res = await gh(`/repos/${REPO}/actions/workflows/capture.yml/dispatches`, {
     method: "POST",
     body: { ref: "main", inputs: { platform, slot, channel, threshold } },
   });
+  // gh() maps HTTP 404 to null — a dispatch that "succeeds" with no run is
+  // almost always a token without Actions: write. Never report it as Watch.
+  if (res === null) {
+    throw new Error("GitHub 404 — the token needs Actions: write on this repo");
+  }
 }
 
 async function cancelRun(runId) {
-  await gh(`/repos/${REPO}/actions/runs/${runId}/cancel`, { method: "POST" });
+  const res = await gh(`/repos/${REPO}/actions/runs/${runId}/cancel`,
+    { method: "POST" });
+  if (res === null) {
+    throw new Error("GitHub 404 — the token needs Actions: write on this repo");
+  }
 }
 
 async function dispatch(workflow) {
-  await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
+  const res = await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
     method: "POST", body: { ref: "main" },
   });
+  if (res === null) {
+    throw new Error("GitHub 404 — the token needs Actions: write on this repo");
+  }
 }
 
 async function loadSystem() {
@@ -742,6 +754,9 @@ function agentTile(slot) {
   const draft = state.drafts[slot] || "";
   const draftState = watchDraft(draft, slot);
   const watchErr = draftState.msg;
+  const watchText = busy
+    ? (v.stopping ? "Stopping…" : "Starting…")
+    : "Watch";
   const watchReady = draftState.enabled && !busy;
   const isExtra = !SLOT_PLATFORM[slot];
   const remove = isExtra
@@ -764,7 +779,7 @@ function agentTile(slot) {
              value="${esc(draft)}" aria-label="Link for ${esc(slot)}" />
       <button class="btn btn-primary btn-sm" data-slotact="watch" data-slot="${esc(slot)}"
               ${watchReady ? "" : "disabled"}
-              title="Make this agent monitor the pasted link">${ICONS.eye} Watch</button>
+              title="Make this agent monitor the pasted link">${ICONS.eye} ${watchText}</button>
     </div>
     <div class="atile-err" data-watcherr="${esc(slot)}">${esc(watchErr)}</div>
     <div class="atile-foot">${remove}${main}</div>
@@ -989,6 +1004,132 @@ function closePlayer() {
 
 /* ------------------------------------------------------------------ events */
 
+/* Slot controls (Watch / Stop / Remove) get their own click listener.
+   The [data-act] listener below returns early for anything without a
+   data-act attribute, which used to swallow every tile click. */
+document.addEventListener("click", async (event) => {
+  const slotBtn = event.target.closest("[data-slotact]");
+  if (slotBtn) {
+    const slot = slotBtn.dataset.slot;
+    const action = slotBtn.dataset.slotact;
+
+    if (action === "remove") {
+      await removeExtraAgent(slot);
+      return;
+    }
+
+    if (action === "watch") {
+      // Manual mode: this exact agent watches this exact link. Watch always
+      // gives the slot its own run for the pasted channel, so it can never
+      // fall back to auto-picking something else. The workflow concurrency
+      // group (cancel-in-progress) replaces an older run for the slot.
+      const platform = slotPlatform(slot);
+      const parsed = parseStreamUrl(state.drafts[slot] || "", platform);
+      if (!parsed || parsed.platform !== platform) {
+        toast(parsed
+          ? `This is a ${platform} agent — paste a ${platform} link`
+          : "Paste a twitch / kick / youtube link first", "err");
+        return;
+      }
+      const liveRun = state.runs.find(
+        (r) => r.slot === slot && r.status === "in_progress");
+      const cur = state.agentState[slot] || {};
+      const curCh = String(cur.channel
+        || (liveRun && liveRun.channel) || "").toLowerCase();
+      if (liveRun && curCh === parsed.name.toLowerCase()) {
+        toast(`${slot} is already watching ${platform}/${parsed.name}`, "ok");
+        return;
+      }
+      state.busy.add(`slot:${slot}`);
+      if (state.agentsDoc) {
+        state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
+          [slot]: { ...(state.agentsDoc.slots[slot] || {}), enabled: true } };
+      }
+      state.stopping.delete(slot);
+      state.runs = state.runs.filter((r) => r.slot !== slot);
+      state.runs.push({ slot, platform, channel: parsed.name,
+        status: "queued", id: 0, created: new Date().toISOString() });
+      render();
+      try {
+        // Bookkeeping is best-effort; the dispatch below is the actual
+        // watch action and must never be skipped because a commit raced.
+        try { await saveSlot(slot, true); } catch { /* cosmetic */ }
+        try { await writeOverride(slot, platform, parsed.name); }
+        catch { /* dispatch carries the channel anyway */ }
+        await dispatchCapture(platform, slot, parsed.name);
+        toast(`${slot} watching ${platform}/${parsed.name}`, "ok");
+        setTimeout(() => loadAgents().then(render).catch(() => {}), 4000);
+      } catch (err) {
+        const why = err.status === 403
+          ? "GitHub 403 — the token needs Actions: write on this repo"
+          : err.message;
+        toast(`Watch failed: ${why}`, "err");
+        setTimeout(() => loadAgents().then(render).catch(() => {}), 500);
+      }
+      state.busy.delete(`slot:${slot}`);
+      render();
+      return;
+    }
+
+    const start = action === "start";
+    const stopRuns = state.runs.filter((x) => x.slot === slot);
+    // instant flip — button + pill change BEFORE any network call
+    state.busy.add(`slot:${slot}`);
+    if (state.agentsDoc) {
+      state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
+        [slot]: { ...(state.agentsDoc.slots[slot] || {}), enabled: start } };
+    }
+    state.runs = state.runs.filter((r) => r.slot !== slot);
+    if (start) {
+      state.stopping.delete(slot);
+      state.runs.push({ slot, platform: slotPlatform(slot),
+        channel: "", status: "queued", id: 0,
+        created: new Date().toISOString() });
+    } else {
+      state.stopping.set(slot, Date.now());
+    }
+    render();
+    try {
+      await saveSlot(slot, start);
+      if (start) {
+        await dispatchCapture(slotPlatform(slot), slot);
+        toast(`${slot} auto mode — picking a live channel`, "ok");
+      } else {
+        for (const r of stopRuns) {
+          try { await cancelRun(r.id); } catch { /* best effort */ }
+        }
+        toast(`${slot} stopped — runs cancelled`, "ok");
+        // the monitor can dispatch in the seconds around a stop — sweep again
+        setTimeout(async () => {
+          try {
+            await loadAgents();
+            for (const r of state.runs.filter((x) => x.slot === slot)) {
+              try { await cancelRun(r.id); } catch { /* best effort */ }
+            }
+            await loadAgents();
+          } catch { /* keep going */ }
+          render();
+        }, 5000);
+      }
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
+    } catch (err) {
+      toast(`Failed: ${err.message}`, "err");
+      // revert the optimistic flip so the UI matches reality again
+      if (state.agentsDoc) {
+        state.agentsDoc.slots[slot] = {
+          ...(state.agentsDoc.slots[slot] || {}), enabled: !start };
+      }
+      if (start) state.runs = state.runs.filter((r) => r.slot !== slot);
+      state.stopping.delete(slot);
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 500);
+    }
+    state.busy.delete(`slot:${slot}`);
+    if (start) state.stopping.delete(slot);   // stop markers purge via loadAgents
+    render();
+    return;
+  }
+});
+
 document.addEventListener("click", async (event) => {
   const tab = event.target.closest("[data-view]");
   if (tab) {
@@ -1075,124 +1216,6 @@ document.addEventListener("click", async (event) => {
       toast(`Failed: ${err.message}`, "err");
       btn.disabled = false;
     }
-    return;
-  }
-
-  const slotBtn = event.target.closest("[data-slotact]");
-  if (slotBtn) {
-    const slot = slotBtn.dataset.slot;
-    const action = slotBtn.dataset.slotact;
-
-    if (action === "remove") {
-      await removeExtraAgent(slot);
-      return;
-    }
-
-    if (action === "watch") {
-      // Manual mode: this exact agent watches this exact link. Watch always
-      // gives the slot its own run for the pasted channel, so it can never
-      // fall back to auto-picking something else. The workflow concurrency
-      // group (cancel-in-progress) replaces an older run for the slot.
-      const platform = slotPlatform(slot);
-      const parsed = parseStreamUrl(state.drafts[slot] || "", platform);
-      if (!parsed || parsed.platform !== platform) {
-        toast(parsed
-          ? `This is a ${platform} agent — paste a ${platform} link`
-          : "Paste a twitch / kick / youtube link first", "err");
-        return;
-      }
-      const liveRun = state.runs.find(
-        (r) => r.slot === slot && r.status === "in_progress");
-      const cur = state.agentState[slot] || {};
-      const curCh = String(cur.channel
-        || (liveRun && liveRun.channel) || "").toLowerCase();
-      if (liveRun && curCh === parsed.name.toLowerCase()) {
-        toast(`${slot} is already watching ${platform}/${parsed.name}`, "ok");
-        return;
-      }
-      state.busy.add(`slot:${slot}`);
-      if (state.agentsDoc) {
-        state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
-          [slot]: { ...(state.agentsDoc.slots[slot] || {}), enabled: true } };
-      }
-      state.stopping.delete(slot);
-      state.runs = state.runs.filter((r) => r.slot !== slot);
-      state.runs.push({ slot, platform, channel: parsed.name,
-        status: "queued", id: 0, created: new Date().toISOString() });
-      render();
-      try {
-        // Bookkeeping is best-effort; the dispatch below is the actual
-        // watch action and must never be skipped because a commit raced.
-        try { await saveSlot(slot, true); } catch { /* cosmetic */ }
-        try { await writeOverride(slot, platform, parsed.name); }
-        catch { /* dispatch carries the channel anyway */ }
-        await dispatchCapture(platform, slot, parsed.name);
-        toast(`${slot} watching ${platform}/${parsed.name}`, "ok");
-        setTimeout(() => loadAgents().then(render).catch(() => {}), 4000);
-      } catch (err) {
-        toast(`Failed: ${err.message}`, "err");
-        setTimeout(() => loadAgents().then(render).catch(() => {}), 500);
-      }
-      state.busy.delete(`slot:${slot}`);
-      render();
-      return;
-    }
-
-    const start = action === "start";
-    const stopRuns = state.runs.filter((x) => x.slot === slot);
-    // instant flip — button + pill change BEFORE any network call
-    state.busy.add(`slot:${slot}`);
-    if (state.agentsDoc) {
-      state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
-        [slot]: { ...(state.agentsDoc.slots[slot] || {}), enabled: start } };
-    }
-    state.runs = state.runs.filter((r) => r.slot !== slot);
-    if (start) {
-      state.stopping.delete(slot);
-      state.runs.push({ slot, platform: slotPlatform(slot),
-        channel: "", status: "queued", id: 0,
-        created: new Date().toISOString() });
-    } else {
-      state.stopping.set(slot, Date.now());
-    }
-    render();
-    try {
-      await saveSlot(slot, start);
-      if (start) {
-        await dispatchCapture(slotPlatform(slot), slot);
-        toast(`${slot} auto mode — picking a live channel`, "ok");
-      } else {
-        for (const r of stopRuns) {
-          try { await cancelRun(r.id); } catch { /* best effort */ }
-        }
-        toast(`${slot} stopped — runs cancelled`, "ok");
-        // the monitor can dispatch in the seconds around a stop — sweep again
-        setTimeout(async () => {
-          try {
-            await loadAgents();
-            for (const r of state.runs.filter((x) => x.slot === slot)) {
-              try { await cancelRun(r.id); } catch { /* best effort */ }
-            }
-            await loadAgents();
-          } catch { /* keep going */ }
-          render();
-        }, 5000);
-      }
-      setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
-    } catch (err) {
-      toast(`Failed: ${err.message}`, "err");
-      // revert the optimistic flip so the UI matches reality again
-      if (state.agentsDoc) {
-        state.agentsDoc.slots[slot] = {
-          ...(state.agentsDoc.slots[slot] || {}), enabled: !start };
-      }
-      if (start) state.runs = state.runs.filter((r) => r.slot !== slot);
-      state.stopping.delete(slot);
-      setTimeout(() => loadAgents().then(render).catch(() => {}), 500);
-    }
-    state.busy.delete(`slot:${slot}`);
-    if (start) state.stopping.delete(slot);   // stop markers purge via loadAgents
-    render();
     return;
   }
 
