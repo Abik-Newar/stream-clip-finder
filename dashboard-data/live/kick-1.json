@@ -12,10 +12,10 @@
   "last_error": null,
   "platform": "kick",
   "run_id": "44308153389",
-  "seconds": 2,
-  "segments": 0,
+  "seconds": 48,
+  "segments": 4,
   "slot": "kick-1",
   "state": "watching",
   "threshold": 2.2,
-  "updated": "2026-11-18T12:54:16.970352+00:00"
+  "updated": "2026-11-18T12:55:02.985036+00:00"
 }
