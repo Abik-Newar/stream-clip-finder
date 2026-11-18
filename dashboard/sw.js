@@ -1,6 +1,6 @@
 /* ClipDesk service worker: app-shell cache only.
    Cross-origin traffic (GitHub API, Drive, fonts) is never intercepted. */
-const VERSION = "clipdesk-v14-watch-primary";
+const VERSION = "clipdesk-v15-watch-input-fix";
 const SHELL = [
   "./",
   "./index.html",

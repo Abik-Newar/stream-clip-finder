@@ -720,17 +720,29 @@ function slotVisual(slot) {
   return { platform, cls, label, ch, since, enabled, stopping, running };
 }
 
+function watchDraft(raw, slot) {
+  /* One source of truth for "can this tile Watch this text?".
+     Used both when rendering the tile and while the user types. */
+  const platform = slotPlatform(slot);
+  const parsed = parseStreamUrl(raw, platform);
+  let msg = "";
+  if (String(raw || "").trim()) {
+    if (!parsed) msg = "not a twitch / kick / youtube link";
+    else if (parsed.platform !== platform) {
+      msg = `this is a ${platform} agent — paste a ${platform} link`;
+    }
+  }
+  return { platform, parsed, msg,
+    enabled: !!(parsed && parsed.platform === platform) };
+}
+
 function agentTile(slot) {
   const v = slotVisual(slot);
   const busy = state.busy.has(`slot:${slot}`);
   const draft = state.drafts[slot] || "";
-  const parsed = parseStreamUrl(draft, v.platform);
-  const watchErr = draft
-    ? (!parsed ? "not a twitch / kick / youtube link"
-      : parsed.platform !== v.platform
-        ? `this is a ${v.platform} agent — paste a ${v.platform} link` : "")
-    : "";
-  const watchReady = !!(parsed && parsed.platform === v.platform) && !busy;
+  const draftState = watchDraft(draft, slot);
+  const watchErr = draftState.msg;
+  const watchReady = draftState.enabled && !busy;
   const isExtra = !SLOT_PLATFORM[slot];
   const remove = isExtra
     ? `<button class="iconbtn atile-x" data-slotact="remove" data-slot="${esc(slot)}" title="Remove this extra agent" ${busy ? "disabled" : ""}>✕</button>`
@@ -1272,19 +1284,11 @@ document.addEventListener("input", (event) => {
   if (!inp) return;
   const slot = inp.dataset.watchurl;
   state.drafts[slot] = inp.value;
-  const parsed = parseStreamUrl(inp.value, platform);
-  const platform = slotPlatform(slot);
+  const { msg, enabled } = watchDraft(inp.value, slot);
   const err = document.querySelector(`[data-watcherr="${slot}"]`);
   const btn = document.querySelector(`button[data-slotact="watch"][data-slot="${slot}"]`);
-  let msg = "";
-  if (inp.value.trim()) {
-    if (!parsed) msg = "not a twitch / kick / youtube link";
-    else if (parsed.platform !== platform) {
-      msg = `this is a ${platform} agent — paste a ${platform} link`;
-    }
-  }
   if (err) err.textContent = msg;
-  if (btn) btn.disabled = !(parsed && parsed.platform === platform);
+  if (btn) btn.disabled = !enabled;
 });
 
 document.addEventListener("keydown", (event) => {
