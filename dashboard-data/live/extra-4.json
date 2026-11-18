@@ -4,7 +4,7 @@
   "candidates": 1828,
   "channel": "adinross",
   "chat_connected": true,
-  "chat_messages": 21546,
+  "chat_messages": 21635,
   "clips": 3,
   "last_ai": "keep=False score=1.0",
   "last_candidate_score": 5.63,
@@ -12,10 +12,10 @@
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308191886",
-  "seconds": 7327,
-  "segments": 733,
+  "seconds": 7374,
+  "segments": 737,
   "slot": "extra-4",
   "state": "watching",
   "threshold": 4.18,
-  "updated": "2026-11-18T14:56:25.942301+00:00"
+  "updated": "2026-11-18T14:57:12.768705+00:00"
 }
