@@ -4,7 +4,7 @@
   "candidates": 31,
   "channel": "rraenee",
   "chat_connected": true,
-  "chat_messages": 4438,
+  "chat_messages": 4511,
   "clips": 1,
   "last_ai": "keep=False score=1.0 \u2192 override",
   "last_candidate_score": 3.02,
@@ -12,10 +12,10 @@
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308179817",
-  "seconds": 2290,
-  "segments": 229,
+  "seconds": 2336,
+  "segments": 233,
   "slot": "kick-3",
   "state": "watching",
   "threshold": 2.47,
-  "updated": "2026-11-18T13:32:26.673780+00:00"
+  "updated": "2026-11-18T13:33:13.407925+00:00"
 }
