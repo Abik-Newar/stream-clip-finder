@@ -232,14 +232,15 @@ python -m streamclip.capture --platform twitch --channel <name> --no-upload
 
 | Option | Default | Meaning |
 |---|---|---|
-| `threshold` | 2.5 | z-score trigger; lower = more clips |
-| `clip_length` / `tail` | 45 / 15 | default lookback / post-peak tail |
-| `max_clip_seconds` | 90 | hard cap (clamped; never posts a >90 s clip) |
-| `min_clip_seconds` | 25 | skips micro-triggers |
-| `cooldown` | 90 | min seconds between clips |
-| `clip_command_trigger` | true | instant trigger on "clip it" |
+| `threshold` | 3.0 | z-score trigger; lower = more clips |
+| `clip_length` / `tail` | 25 / 10 | lookback before the peak / post-peak tail |
+| `max_clip_seconds` | 60 | hard cap (system clamps under 90 s) |
+| `min_clip_seconds` | 18 | skips micro-triggers |
+| `cooldown` | 120 | min seconds between clips |
+| `grace_period` | 45 | best-of-lull wait before a marginal clip is cut |
+| `clip_command_trigger` | true | instant trigger on "clip it" (any language) |
 | `scene_snap` | true | snap boundaries to scene cuts |
-| `whisper_model` | base | `tiny` (fastest) → `small` (best, needs CPU) |
+| `whisper_model` | small | `tiny` (fastest) → `small` (best for Hindi/Hinglish) |
 | `transcription` | true | set false for lowest CPU usage |
 | `max_concurrent` | 6 | parallel capture agents |
 
@@ -248,7 +249,9 @@ trigger, so very short streams won't produce clips.
 
 ## Honest limitations
 
-- Clips are **near-real-time**: expect the clip in Drive ~1–2 min after the moment.
+- Clips are **near-real-time**: target **3–5 min** from the moment to the board
+  (~1–2.5 min typical). Each clip logs its real `latency: peak→board` breakdown
+  (wait / cut / whisper / AI / upload / publish) in the Actions log.
 - GitHub Actions jobs cap at **6h**; streams longer than 5.5h restart cleanly.
 - Monitor cron can drift a few minutes (GitHub limitation).
 - **Concurrency**: free plans allow 20 concurrent standard-runner jobs, so 6
