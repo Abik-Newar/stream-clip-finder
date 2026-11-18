@@ -472,9 +472,8 @@ async function addExtraAgent() {
   render();
   try {
     await commitAgentsDoc(`agents: added ${slot} (${platform})`);
-    await dispatchCapture(platform, slot);
-    state.runs.push({ slot, platform, channel: "", status: "queued",
-      id: 0, created: new Date().toISOString() });
+    // Manual mode: adding a tile does NOT start anything. Nothing runs
+    // until a link is pasted and Watch is pressed.
     toast(`${slot} added — paste a link and press Watch`, "ok");
     setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
   } catch (err) {
