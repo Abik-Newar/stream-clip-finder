@@ -94,7 +94,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: whisper-${{ runner.os }}-${{ vars.WHISPER_MODEL || 'base' }}
+          key: whisper-${{ runner.os }}-${{ vars.WHISPER_MODEL || 'small' }}
       - name: Restore rclone config
         run: |
           mkdir -p ~/.config/rclone
@@ -146,6 +146,7 @@ jobs:
           AI_BASE_URL: http://localhost:11434/v1
           AI_MODEL: ${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
           SCF_THRESHOLD: ${{ inputs.threshold }}
+          SCF_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
           SCF_PROBE_TIMEOUT: "45"
           YT_COOKIES: ${{ secrets.YT_COOKIES }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

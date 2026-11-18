@@ -224,6 +224,13 @@ select.chip { appearance: none; padding-right: 26px;
 .iconbtn.star-on { color: var(--star); }
 .iconbtn.star-on:hover { color: var(--star); }
 .iconbtn.del:hover { color: #e5484d; border-color: #e5484d66; background: #e5484d14; }
+.iconbtn.armed {
+  width: auto; padding: 0 9px; gap: 4px;
+  color: #ff8a8f; border-color: #e5484d99; background: #e5484d20;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.atile-x.armed { width: auto; padding: 0 8px; color: #ff8a8f;
+  border-color: #e5484d99; background: #e5484d20; font-size: 12px; font-weight: 600; }
 
 .card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .meta-item {

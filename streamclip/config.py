@@ -19,7 +19,7 @@ class Options:
 
     # Detection
     threshold: float = 3.0         # fused hype z-score that a peak must reach
-    cooldown: int = 180            # min seconds between clips (diversity gap)
+    cooldown: int = 120            # min seconds between clips (diversity gap)
     window: int = 60               # scoring window (s)
     baseline: int = 900            # rolling baseline window (s)
     min_uptime: int = 120          # ignore the first N seconds of a capture
@@ -35,7 +35,7 @@ class Options:
 
     # Quality gates (v4) — only the BEST of a stream reaches the board
     strong_factor: float = 1.5     # score ≥ this × threshold cuts immediately
-    grace_period: int = 90         # unbeaten "lull-best" waits this long, then cuts
+    grace_period: int = 45         # unbeaten "lull-best" waits this long, then cuts
     max_per_hour: int = 3          # rolling-hour clip quota per channel
     threshold_floor: float = 2.0   # auto-calibration lower bound (quality floor)
     threshold_ceiling: float = 6.0 # auto-calibration upper bound

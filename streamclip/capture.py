@@ -636,8 +636,17 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             f"[{int(at) // 60:02d}:{int(at) % 60:02d}] {tag}: {text}"
             for at, tag, text in lines)
 
-    def cut(t_start, t_end, score_val, reason):
+    def cut(t_start, t_end, score_val, reason, peak_t=None, accepted_at=None):
+        """Cut, judge, upload and publish one clip.
+
+        `peak_t` (absolute epoch) and `accepted_at` let the log show the real
+        moment→board latency, which is what the 3–5 minute target measures.
+        """
+        peak_t = peak_t if peak_t is not None else t_start
+        accepted_at = accepted_at or time.time()
+        perf = {}
         rel_start, rel_end = t_start - t0, t_end - t0
+        mark = time.perf_counter()
         if opts.scene_snap:
             try:
                 rel_start, rel_end = clipper.snap_to_cuts(
@@ -665,18 +674,23 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             log.info("duplicate dropped: agent %s owns %s (earlier claim)",
                      rival, channel)
             return
+        perf["cut"] = time.perf_counter() - mark
         title = caption = hashtags = quote = None
         if opts.ai_ranking:
             # Whisper lags a few seconds behind the video — wait until the
-            # payoff itself is transcribed (max 30 s) so the judge reads the
-            # actual crazy line, not the setup before it.
+            # payoff itself is transcribed so the judge reads the actual
+            # crazy line, not the setup. 12 s is plenty for base on 4 cores;
+            # the old 30 s wait was pure dead time on the critical path.
             need = int(max(rel_start, rel_end) // opts.segment_time) + 1
-            deadline = time.time() + 30
+            deadline = time.time() + 12
             while progress[0] < need and time.time() < deadline \
                     and not stop.is_set():
-                time.sleep(0.5)
+                time.sleep(0.25)
+            perf["whisper_wait"] = time.perf_counter() - mark - perf["cut"]
+            mark = time.perf_counter()
             verdict = rank_clip(transcript_window(rel_start, rel_end),
-                                channel, platform)
+                                channel, platform, wait_s=15)
+            perf["ai"] = time.perf_counter() - mark
             if verdict is None:
                 if score_val < opts.threshold * opts.strong_factor:
                     out.unlink(missing_ok=True)
@@ -718,17 +732,34 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             log.info("kept %s (%.0fs, %s)", out, actual_dur, reason)
             return
         try:
+            mark = time.perf_counter()
             dest = upload.upload_clip(out, channel,
                                       opts.drive_remote, opts.drive_folder)
-            upload.upload_manifest(manifest, channel,
-                                   opts.drive_remote, opts.drive_folder)
-            log.info("uploaded %s (%.0fs, %s) → %s", name, actual_dur, reason, dest)
+            perf["upload"] = time.perf_counter() - mark
+            mark = time.perf_counter()
+            # publish FIRST — the board is what the user watches; the
+            # manifest merge (download + re-upload) is bookkeeping.
             dashboard.publish_clip(entry, dest)
+            perf["publish"] = time.perf_counter() - mark
+            log.info("uploaded %s (%.0fs, %s) → %s", name, actual_dur, reason, dest)
+            log.info("latency: peak→board %.0fs | wait %.0fs, cut %.1fs, "
+                     "whisper %.1fs, AI %.1fs, upload %.1fs, publish %.1fs",
+                     time.time() - peak_t, accepted_at - peak_t,
+                     perf.get("cut", 0), perf.get("whisper_wait", 0),
+                     perf.get("ai", 0), perf.get("upload", 0),
+                     perf.get("publish", 0))
         except Exception as exc:
             log.error("upload failed: %s (clip kept at %s)", exc, out)
+            return
+        # bookkeeping only — never let a manifest merge look like a failed clip
+        try:
+            upload.upload_manifest(manifest, channel,
+                                   opts.drive_remote, opts.drive_folder)
+        except Exception as exc:
+            log.warning("manifest upload failed: %s", exc)
 
     while not stop.is_set():
-        stop.wait(5)
+        stop.wait(2)
         now = time.time()
 
         # 0) claim watchdog — never two agents on one channel: if a rival
@@ -790,9 +821,9 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         # 3) finish pending clips whose tail has now been recorded
         coverage_end = t0 + last_idx * opts.segment_time
         for item in list(pending):
-            t_start, t_end, s, trig = item
+            t_start, t_end, s, trig, peak, accepted = item
             if coverage_end >= t_end:
-                cut(t_start, t_end, s, trig)
+                cut(t_start, t_end, s, trig, peak, accepted)
                 pending.remove(item)
 
         # 4) peak-based selection with quality gates (v4)
@@ -810,7 +841,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             enough = last_idx * opts.segment_time >= opts.min_clip_seconds
             for cand in gate.observe(cands, now, enough):
                 pending.append((cand["clip"][0], cand["clip"][1],
-                                cand["score"], cand["reason"]))
+                                cand["score"], cand["reason"],
+                                cand["peak"], time.time()))
                 log.info("clip selected: %.2f | %s | %+.0fs..%+.0fs",
                          cand["score"], cand["reason"],
                          cand["clip"][0] - t0, cand["clip"][1] - t0)
@@ -833,11 +865,13 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         pending.clear()
     elif gate.arena:
         a = gate.arena
-        pending.append((a["clip"][0], a["clip"][1], a["score"], a["reason"]))
+        pending.append((a["clip"][0], a["clip"][1], a["score"], a["reason"],
+                        a["peak"], time.time()))
         log.info("flushing best-of-lull candidate at stream end (%.2f)",
                  a["score"])
-    for t_start, t_end, s, trig in pending:
-        cut(t_start, min(t_end, t0 + last_idx * opts.segment_time), s, trig)
+    for t_start, t_end, s, trig, peak, accepted in pending:
+        cut(t_start, min(t_end, t0 + last_idx * opts.segment_time), s, trig,
+            peak, accepted)
     _stop(reader)
     _stop(ffmpeg)
     if chat:

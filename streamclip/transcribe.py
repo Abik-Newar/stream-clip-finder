@@ -8,12 +8,27 @@ Keyword weights follow clip-detection research:
 """
 
 HYPE_KEYWORDS = [
+    # English
     "let's go", "lets go", "no way", "what the", "holy", "insane", "crazy",
     "unreal", "oh my god", "omg", "we did it", "clutch", "unbelievable",
     "are you kidding", "no shot", "wtf", "sheesh", "unreal",
+    # Hinglish (Roman) — Hindi streams are transcribed this way most often
+    "pagal", "paagal", "gajab", "ghazab", "zabardast", "jabardast",
+    "kya baat", "kya kar", "matlab", "sach mein", "sachmein", "bakwas",
+    "fatafat", "khatam", "arre", "oye", "yaar", "bhai", "dekh", "dekhna",
+    "ruko", "chalo", "dhoka", "majboor", "hahaha", "hahah",
+    # Devanagari (Whisper writes Hindi in its own script when confident)
+    "पागल", "गजब", "ज़बरदस्त", "जबरदस्त", "क्या बात", "क्या कर",
+    "मतलब", "सच में", "बकवास", "फटाफट", "खत्म", "अरे", "ओए", "यार",
+    "भाई", "देखो", "रुको", "चलो", "धोखा", "हाहा", "हाहाहा",
 ]
 
-CLIP_COMMANDS = ("clip it", "clip this", "clip that", "clip now")
+CLIP_COMMANDS = (
+    "clip it", "clip this", "clip that", "clip now",
+    # Hindi/Hinglish clip commands — the highest-precision signal there is
+    "clip karo", "clip kar", "clip kar do", "clip bana", "clip banao",
+    "क्लिप करो", "क्लिप कर", "क्लिप बनाओ", "इसे क्लिप",
+)
 
 
 def analyze(text: str) -> dict:
@@ -23,7 +38,8 @@ def analyze(text: str) -> dict:
         return {"score": 0.0, "command": False}
     score = sum(1.0 for k in HYPE_KEYWORDS if k in low)
     score += min(low.count("!"), 3) * 0.2
-    score += min(low.count("haha"), 6) * 0.75   # laughter
+    score += min(low.count("haha"), 6) * 0.75   # English laughter
+    score += min(low.count("हाहा") + low.count("हा हा"), 4) * 0.75
     command = any(c in low for c in CLIP_COMMANDS)
     if command:
         score += 5.0
@@ -47,6 +63,10 @@ class Transcriber:
         """Return [{"start", "end", "text"}] for one segment file."""
         segments, _info = self._model.transcribe(
             str(path),
+            # language=None → auto-detect per segment, so Hindi, Hinglish,
+            # Spanish, Arabic… all get transcribed and can be clipped.
+            language=None,
+            task="transcribe",
             vad_filter=True,
             condition_on_previous_text=False,
             beam_size=1,

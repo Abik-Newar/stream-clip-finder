@@ -43,6 +43,14 @@ REACTION_CUES = (
     "let's go", "gg", "clutch", "insane", "hype", "no way", "wtf", "holy",
     "omg", "sheesh", "sheeesh", "ez clap", "clapped", "diff", "caught",
     "ayo", "W in the chat",
+    # Hinglish chat — Indian Kick/Twitch chats react in Roman Hindi
+    "pagal", "paagal", "gajab", "ghazab", "zabardast", "jabardast",
+    "kya baat", "khatam", "arre", "oye", "bhai", "haha",
+    # Devanagari chat
+    "पागल", "गजब", "ज़बरदस्त", "जबरदस्त", "क्या बात", "खत्म", "अरे",
+    "ओए", "भाई", "हाहा",
+    # emoji bursts only count when repeated — one emoji is just normal chat
+    "🔥🔥", "😂😂", "🤣🤣",
 )
 
 # Signal weights for the fused hype score.

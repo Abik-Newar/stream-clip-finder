@@ -70,7 +70,7 @@ options:
 
   # Detection — see README "How clip detection works"
   threshold: 3.0         # fused hype z-score a peak must reach
-  cooldown: 180          # minimum seconds between clips (diversity gap)
+  cooldown: 120          # minimum seconds between clips (diversity gap)
   window: 60             # scoring window (seconds)
   baseline: 900          # rolling baseline window (seconds)
   min_uptime: 120        # ignore the first N seconds of a capture
@@ -86,8 +86,10 @@ options:
 
   # Quality gates (v4) — only the BEST of a stream reaches the board
   strong_factor: 1.5     # score ≥ 1.5×threshold cuts instantly, no waiting
-  grace_period: 90       # a "lull-best" candidate must stay unbeaten this long
+  grace_period: 45       # a "lull-best" candidate must stay unbeaten this long
   max_per_hour: 3        # rolling-hour clip quota per channel
+  # Latency budget: peak → board must stay inside 3–5 min. Setup on a warm
+  # runner is ~40 s; detection+grace ≤ ~60 s; AI ≤ ~25 s; upload ~10–30 s.
   threshold_floor: 2.0   # auto-calibration bounds (quiet decay / quota raise)
   threshold_ceiling: 6.0
   overlap_iou: 0.3       # reject cuts overlapping a recent clip
@@ -95,7 +97,9 @@ options:
 
   # Intelligence — only real spoken payoffs reach the board
   transcription: true    # Whisper transcript feeds the judge
-  whisper_model: base    # tiny | base | small (small = best, slowest)
+  whisper_model: small   # tiny | base | small — small is the minimum that
+                         # transcribes Hindi/Hinglish well; override with the
+                         # repo variable WHISPER_MODEL if needed
   ai_ranking: true       # open-source LLM (Ollama on the runner) judges clips
   ai_min_score: 6.5      # 1-10 virality bar; below this the clip is dropped
   title_template: ""     # title format for every clip, e.g. "🔥 {channel} — {title}"

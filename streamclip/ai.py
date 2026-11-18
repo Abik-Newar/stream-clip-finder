@@ -29,11 +29,21 @@ Read the transcript excerpt and answer ONE question: does it contain a moment
 where the streamer actually SAYS something that would stop a stranger from
 scrolling?
 
+LANGUAGE — READ THIS FIRST: the transcript may be in English, Hindi,
+Hinglish (Roman Hindi), Devanagari, Spanish, Arabic or any other language.
+A great line in ANY language counts. Never reject a clip just because it is
+not English. Copy the quote EXACTLY as spoken, in its original language and
+script — never translate it. Write the title and caption in the SAME
+language/script as the quote (for Hindi speech, natural Hinglish is perfect).
+Hashtags can stay in English for reach.
+
 A clip passes ONLY if it has a real spoken payoff, for example:
 - a shocking, wild or controversial statement / hot take
 - a confession, threat, insane claim or absurd story
 - a huge reveal, plot twist or genuinely hilarious line
 - an extreme reaction to something that just happened
+(Hindi/Hinglish examples: "bhai ye kya ho gaya", "main pagal ho jaunga",
+"ye sach mein hua hai", "dekh dekh kya karta hai" — only when it lands.)
 
 REJECT (keep=false) normal gameplay commentary, greetings, thanking subs,
 reading donations, filler, silence, and jokes that need missing context.
@@ -47,8 +57,8 @@ Answer ONLY with JSON, no markdown:
 {"keep": true|false,
  "score": 1-10,
  "quote": "the exact craziest line, copied from the transcript",
- "title": "3-6 word clickable title",
- "caption": "1-2 catchy sentences, hook first, no spoilers",
+ "title": "3-6 word clickable title (same language as the quote)",
+ "caption": "1-2 catchy sentences, hook first, no spoilers (same language)",
  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4"]}
 
 Channel: {channel} ({platform} platform)

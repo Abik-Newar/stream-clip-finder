@@ -113,6 +113,7 @@ const state = {
   drafts: {},            // slot → pasted link in the tile's watch input
   openClip: null,        // clip shown in the modal (for copy buttons)
   busy: new Set(),
+  armed: null,           // {kind:"delete"|"remove", key, at} — second click confirms
   stopping: new Map(),   // slot → ts: runs are being cancelled, show "Stopping…"
   starting: 0,           // ts of the last master Start — "Starting…" until confirmed
   loaded: false,
@@ -237,13 +238,24 @@ async function saveClip(clip, patch, message) {
   render();
 }
 
-async function deleteClip(clipKey) {
-  const meta = await gh(`/repos/${REPO}/contents/${DATA_DIR}/${clipKey}.json`);
-  if (!meta || !meta.sha) throw new ApiError(404, "clip file not found");
-  await gh(`/repos/${REPO}/contents/${DATA_DIR}/${clipKey}.json`, {
+async function deleteClip(clip) {
+  const name = clip._name || `${clip.clip_key}.json`;
+  const path = `/repos/${REPO}/contents/${DATA_DIR}/${name}`;
+  let sha = clip._sha;
+  if (!sha) {
+    const meta = await gh(path);
+    if (!meta || !meta.sha) throw new ApiError(404, "this row is already gone — refresh");
+    sha = meta.sha;
+  }
+  const res = await gh(path, {
     method: "DELETE",
-    body: { message: `clip: delete ${clipKey}`, sha: meta.sha },
+    body: { message: `clip: delete ${clip.clip_key}`, sha },
   });
+  // gh() maps HTTP 404 to null. A DELETE that returns nothing is a FAILURE:
+  // treating it as success made the card vanish here and reappear on refresh.
+  if (res === null) {
+    throw new ApiError(404, "GitHub did not delete the file — refresh and retry");
+  }
 }
 
 /* ------------------------------------------------------- agents (9 slots) */
@@ -497,7 +509,19 @@ async function addExtraAgent() {
 }
 
 async function removeExtraAgent(slot) {
-  if (!confirm(`Remove agent ${slot}?\n\nIts runs are cancelled and the tile disappears. The nine built-in agents stay.`)) return;
+  const armed = state.armed && state.armed.kind === "remove" &&
+    state.armed.key === slot && Date.now() - state.armed.at < 6000;
+  if (!armed) {
+    state.armed = { kind: "remove", key: slot, at: Date.now() };
+    render();
+    toast(`Click Remove again to delete ${slot}`, "");
+    setTimeout(() => {
+      if (state.armed && state.armed.kind === "remove" &&
+          state.armed.key === slot) { state.armed = null; render(); }
+    }, 6000);
+    return;
+  }
+  state.armed = null;
   const stopRuns = state.runs.filter((r) => r.slot === slot);
   const busy = state.busy.has(`slot:${slot}`);
   if (busy) return;
@@ -549,7 +573,11 @@ function cardHTML(c) {
   const star = c.starred
     ? `<button class="iconbtn star-on" data-act="star" title="Remove star" ${busy ? "disabled" : ""}>${ICONS.starFill}</button>`
     : `<button class="iconbtn" data-act="star" title="Star as best clip" ${busy ? "disabled" : ""}>${ICONS.star}</button>`;
-  const del = `<button class="iconbtn del" data-act="delete" title="Delete this clip from the board (the video file stays in Google Drive)" ${busy ? "disabled" : ""}>${ICONS.trash}</button>`;
+  const armed = state.armed && state.armed.kind === "delete" &&
+    state.armed.key === c.clip_key;
+  const del = armed
+    ? `<button class="iconbtn del armed" data-act="delete" title="Click again to delete this row (the video file stays in Google Drive)" ${busy ? "disabled" : ""}>Delete?</button>`
+    : `<button class="iconbtn del" data-act="delete" title="Delete this clip from the board (the video file stays in Google Drive)" ${busy ? "disabled" : ""}>${ICONS.trash}</button>`;
   const watch = c.drive_id
     ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Open</button>
        <a class="videobtn" title="Open in Drive (new tab)" target="_blank" rel="noopener"
@@ -759,8 +787,10 @@ function agentTile(slot) {
     : "Watch";
   const watchReady = draftState.enabled && !busy;
   const isExtra = !SLOT_PLATFORM[slot];
+  const removeArmed = state.armed && state.armed.kind === "remove" &&
+    state.armed.key === slot;
   const remove = isExtra
-    ? `<button class="iconbtn atile-x" data-slotact="remove" data-slot="${esc(slot)}" title="Remove this extra agent" ${busy ? "disabled" : ""}>✕</button>`
+    ? `<button class="iconbtn atile-x ${removeArmed ? "armed" : ""}" data-slotact="remove" data-slot="${esc(slot)}" title="Remove this extra agent" ${busy ? "disabled" : ""}>${removeArmed ? "Remove?" : "✕"}</button>`
     : "";
   const main = v.running
     ? `<button class="btn btn-danger btn-sm" data-slotact="stop" data-slot="${esc(slot)}" ${busy ? "disabled" : ""}>${ICONS.stop} Stop</button>`
@@ -1245,14 +1275,35 @@ document.addEventListener("click", async (event) => {
   }
 
   if (act === "delete") {
-    if (!confirm(`Delete "${clip.clip_key}" from the board?\n\nThe video file stays in Google Drive — this only removes the task row.`)) return;
+    // Two-step inline confirm. window.confirm() can be suppressed by the
+    // browser (or by an installed PWA), which made the trash button dead.
+    const armed = state.armed && state.armed.kind === "delete" &&
+      state.armed.key === clip.clip_key &&
+      Date.now() - state.armed.at < 6000;
+    if (!armed) {
+      state.armed = { kind: "delete", key: clip.clip_key, at: Date.now() };
+      render();
+      setTimeout(() => {
+        if (state.armed && state.armed.kind === "delete" &&
+            state.armed.key === clip.clip_key) { state.armed = null; render(); }
+      }, 6000);
+      return;
+    }
+    state.armed = null;
     state.busy.add(clip.clip_key);
     render();
     try {
-      await deleteClip(clip.clip_key);
+      await deleteClip(clip);
       state.clips = state.clips.filter((c) => c.clip_key !== clip.clip_key);
       toast("Clip deleted from the board (video stays in Drive)", "ok");
-    } catch (err) { toast(`Failed: ${err.message}`, "err"); }
+    } catch (err) {
+      const why = err.status === 403
+        ? "GitHub 403 — the token needs Contents: write on this repo"
+        : err.message;
+      toast(`Delete failed: ${why}`, "err");
+      // resync so a partial/failed delete cannot leave a phantom card
+      loadClips().then(render).catch(() => {});
+    }
     state.busy.delete(clip.clip_key);
     render();
     return;
