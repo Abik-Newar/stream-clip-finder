@@ -48,24 +48,38 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.scf-bin
-          key: cli-${{ runner.os }}-ffmpeg7-rclone
+          key: cli-${{ runner.os }}-ffmpeg8-rclone
       - name: Install capture deps
         run: |
           # Static ffmpeg + rclone (cached) — no apt, capture starts in ~30 s
           mkdir -p ~/.scf-bin
           if [ ! -x ~/.scf-bin/ffmpeg ]; then
-            curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
-              -o /tmp/ffmpeg.tar.xz
-            mkdir -p /tmp/ffmpeg-static
-            tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-static --strip-components=1
-            cp /tmp/ffmpeg-static/ffmpeg /tmp/ffmpeg-static/ffprobe ~/.scf-bin/
+            # GitHub-hosted asset (reliable); validate the archive because a
+            # partial/HTML download once killed a whole agent slot.
+            for i in 1 2 3; do
+              curl -fsSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+                -o /tmp/ffmpeg.tar.xz || { sleep 3; continue; }
+              rm -rf /tmp/ffmpeg-static && mkdir -p /tmp/ffmpeg-static
+              if tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-static --strip-components=1 2>/dev/null; then
+                cp /tmp/ffmpeg-static/bin/ffmpeg /tmp/ffmpeg-static/bin/ffprobe ~/.scf-bin/ && break
+              fi
+              echo "ffmpeg download attempt $i was corrupt — retrying"
+              sleep 3
+            done
+            [ -x ~/.scf-bin/ffmpeg ] || { echo "FATAL: could not fetch ffmpeg"; exit 1; }
           fi
           if [ ! -x ~/.scf-bin/rclone ]; then
-            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
-              -o /tmp/rclone.zip
-            mkdir -p /tmp/rclone-static
-            unzip -q -o /tmp/rclone.zip -d /tmp/rclone-static
-            cp /tmp/rclone-static/rclone-*/rclone ~/.scf-bin/
+            for i in 1 2 3; do
+              curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+                -o /tmp/rclone.zip || { sleep 3; continue; }
+              rm -rf /tmp/rclone-static && mkdir -p /tmp/rclone-static
+              if unzip -q -o /tmp/rclone.zip -d /tmp/rclone-static 2>/dev/null; then
+                cp /tmp/rclone-static/rclone-*/rclone ~/.scf-bin/ && break
+              fi
+              echo "rclone download attempt $i was corrupt — retrying"
+              sleep 3
+            done
+            [ -x ~/.scf-bin/rclone ] || { echo "FATAL: could not fetch rclone"; exit 1; }
           fi
           chmod +x ~/.scf-bin/*
           echo "$HOME/.scf-bin" >> "$GITHUB_PATH"

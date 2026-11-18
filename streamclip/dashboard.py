@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -135,37 +136,60 @@ def publish_agent_state(slot: str, platform: str, channel: str,
         return ""
 
 
+def _update_claim(slot: str, message: str, make_doc, allow=None) -> bool:
+    """Read-modify-write a slot's claim file, retrying lost SHA races.
+
+    The contents API needs the current blob SHA; when another writer wins
+    between our GET and PUT it answers 409 and NOTHING is written. That
+    used to leave stale claims forever, so each attempt re-reads the SHA."""
+    token = _token()
+    if not token or not slot:
+        return False
+    url = f"{API}/repos/{_repo()}/contents/{AGENT_STATE_DIR}/{slot}.json"
+    for attempt in range(3):
+        status, meta = _request("GET", url, token)
+        if status != 200 or not isinstance(meta, dict):
+            return False
+        cur = json.loads(base64.b64decode(meta.get("content", "")).decode())
+        if allow is not None and not allow(cur):
+            return False
+        doc = make_doc(cur)
+        code, body = _request("PUT", url, token, payload={
+            "message": message,
+            "content": base64.b64encode(
+                (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()
+            ).decode(),
+            "sha": meta.get("sha"),
+        })
+        if code in (200, 201):
+            return True
+        log.info("dashboard: claim write %s → HTTP %s %r — retrying",
+                 slot, code, body)
+        time.sleep(1 + attempt)
+    return False
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def release_agent_state(slot: str, run_id: str = "") -> None:
     """Clear a claim on shutdown — but only if THIS run still owns the file.
 
     Guards against a cancelled agent wiping the fresh claim of its
     replacement (the concurrency group can overlap for a few seconds)."""
     try:
-        token = _token()
-        if not token or not slot:
-            return
-        url = f"{API}/repos/{_repo()}/contents/{AGENT_STATE_DIR}/{slot}.json"
-        status, meta = _request("GET", url, token)
-        if status != 200 or not isinstance(meta, dict):
-            return
-        doc = json.loads(base64.b64decode(meta.get("content", "")).decode())
-        if run_id and str(doc.get("run_id") or "") != str(run_id):
-            return                          # a newer run owns the slot now
-        from datetime import datetime, timezone
-        new = {
-            "slot": slot,
-            "platform": doc.get("platform"),
-            "channel": "",
-            "run_id": str(run_id),
-            "since": datetime.now(timezone.utc).isoformat(),
-        }
-        _request("PUT", url, token, payload={
-            "message": f"agent: {slot} released its channel",
-            "content": base64.b64encode(
-                (json.dumps(new, indent=2, sort_keys=True) + "\n").encode()
-            ).decode(),
-            "sha": meta.get("sha"),
-        })
+        def allow(cur):
+            return not (run_id and str(cur.get("run_id") or "") != str(run_id))
+
+        def make(cur):
+            return {"slot": slot, "platform": cur.get("platform"),
+                    "channel": "", "run_id": str(run_id), "since": _now_iso()}
+
+        if _update_claim(slot, f"agent: {slot} released its channel",
+                         make, allow):
+            log.info("dashboard: %s released its channel", slot)
     except Exception as exc:
         log.info("dashboard: claim release failed: %s", exc)
 
@@ -178,33 +202,25 @@ def reset_agent_state(slot: str, run_id: str = "") -> None:
     for the 5-minute freshness window). A new run of the slot owns that
     file and clears it before picking anything."""
     try:
-        token = _token()
-        if not token or not slot:
-            return
-        url = f"{API}/repos/{_repo()}/contents/{AGENT_STATE_DIR}/{slot}.json"
-        status, meta = _request("GET", url, token)
-        if status != 200 or not isinstance(meta, dict):
-            return
-        doc = json.loads(base64.b64decode(meta.get("content", "")).decode())
-        old_run = str(doc.get("run_id") or "")
-        if not old_run or old_run == str(run_id):
-            return                          # no stale claim to clear
-        from datetime import datetime, timezone
-        new = {
-            "slot": slot,
-            "platform": doc.get("platform"),
-            "channel": "",
-            "run_id": str(run_id),
-            "since": datetime.now(timezone.utc).isoformat(),
-        }
-        _request("PUT", url, token, payload={
-            "message": f"agent: {slot} cleared a stale claim",
-            "content": base64.b64encode(
-                (json.dumps(new, indent=2, sort_keys=True) + "\n").encode()
-            ).decode(),
-            "sha": meta.get("sha"),
-        })
-        log.info("dashboard: cleared stale claim for %s (run %s)", slot, old_run)
+        def allow(cur):
+            old = str(cur.get("run_id") or "")
+            return bool(old) and old != str(run_id)
+
+        def make(cur):
+            return {"slot": slot, "platform": cur.get("platform"),
+                    "channel": "", "run_id": str(run_id), "since": _now_iso()}
+
+        status, meta = _request(
+            "GET", f"{API}/repos/{_repo()}/contents/"
+            f"{AGENT_STATE_DIR}/{slot}.json", _token() or "")
+        old_run = ""
+        if status == 200 and isinstance(meta, dict):
+            cur = json.loads(base64.b64decode(meta.get("content", "")).decode())
+            old_run = str(cur.get("run_id") or "")
+        if _update_claim(slot, f"agent: {slot} cleared a stale claim",
+                         make, allow):
+            log.info("dashboard: cleared stale claim for %s (run %s)",
+                     slot, old_run)
     except Exception as exc:
         log.info("dashboard: stale claim reset failed: %s", exc)
 

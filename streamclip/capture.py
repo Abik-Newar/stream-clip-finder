@@ -865,7 +865,10 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
         p, n, spec = target
         log.info("▸ agent %s taking %s/%s", slot, p, n)
         rename_run(p, n, slot)
-        dashboard.publish_agent_state(slot, p, n, my_run_id)
+        # choose_target commits the claim too; this second write retries if
+        # that one failed, and refreshes "since" only harmlessly.
+        if not dashboard.publish_agent_state(slot, p, n, my_run_id):
+            log.warning("%s: claim write failed — capture continues", slot)
         result, redirect = capture_channel(p, n, spec, opts, stop,
                                            my_run_id=my_run_id, my_slot=slot)
         if result == "stopped":
