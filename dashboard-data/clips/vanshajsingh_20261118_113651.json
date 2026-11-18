@@ -1,23 +1,23 @@
 {
-  "caption": "Pipeline test: 20s recorded live from kick/vanshajsingh. \u2014 GTA6",
+  "caption": "Pipeline test: 20s recorded live from kick/vanshajsingh. — GTA6",
   "channel": "vanshajsingh",
   "clip_key": "vanshajsingh_20261118_113651",
   "created_at": "2026-11-18T11:37:46.058596+00:00",
-  "done_at": null,
+  "done_at": "2026-11-18T12:11:31.295Z",
   "drive_id": "1QN3YYvSomFR24Za7l37d9nwm4tvM6ItY",
   "drive_path": "gdrive:StreamClips/vanshajsingh/2026-11-18/vanshajsingh_20261118_113651.mp4",
-  "duration": 20.0,
+  "duration": 20,
   "file": "vanshajsingh_20261118_113651.mp4",
   "hashtags": "#GTA6 #clips #test #streamer",
   "platform": "kick",
-  "quote": "Test clip \u2014 captured, uploaded and linked from the live stream.",
-  "score": 1.0,
+  "quote": "Test clip — captured, uploaded and linked from the live stream.",
+  "score": 1,
   "starred": false,
-  "status": "not_started",
+  "status": "done",
   "stream_t": [
-    0.0,
-    20.0
+    0,
+    20
   ],
-  "title": "TEST CLIP \u2014 vanshajsingh | GTA6",
+  "title": "TEST CLIP — vanshajsingh | GTA6",
   "trigger": "manual pipeline test"
 }
