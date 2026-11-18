@@ -108,6 +108,14 @@ def _parse(content, channel=""):
     }
 
 
+def _build_prompt(channel, platform, transcript):
+    """Fill the template without str.format — the JSON schema in the prompt
+    contains literal braces, which format() would treat as fields."""
+    return (PROMPT.replace("{channel}", str(channel or "unknown"))
+                  .replace("{platform}", str(platform or "unknown"))
+                  .replace("{transcript}", str(transcript or "")[-3500:]))
+
+
 def rank_clip(transcript_text, channel="", platform="", wait_s=45):
     """Judge a clip. Returns a validated verdict dict, or None if unavailable."""
     base, model, key = _endpoint()
@@ -118,9 +126,7 @@ def rank_clip(transcript_text, channel="", platform="", wait_s=45):
     except ImportError:
         return None
 
-    prompt = PROMPT.format(channel=channel or "unknown",
-                           platform=platform or "unknown",
-                           transcript=transcript_text[-3500:])
+    prompt = _build_prompt(channel, platform, transcript_text)
     deadline = time.time() + max(0, wait_s)
     attempt = 0
     while True:

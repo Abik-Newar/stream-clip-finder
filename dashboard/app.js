@@ -797,7 +797,7 @@ function renderAgents() {
           </div>
         </div>
       </div>
-      <span class="hint">each tile below is one agent · Auto finds a live channel · paste a link + Watch to lock it to that channel · no two agents ever share a channel</span>
+      <span class="hint">each tile below is one agent · Auto finds a live channel · paste a link + Watch to lock it to that channel · no two agents ever capture the same creator (Twitch + Kick simulcasts included)</span>
       <button class="btn btn-ghost btn-sm" data-act="addagent">${ICONS.plus} Add agent</button>
     </div>
     <div class="agentgrid">${groups}${extraGroup}</div>

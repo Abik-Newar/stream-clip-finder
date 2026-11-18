@@ -54,6 +54,16 @@ def _parse_title(title):
 AGENT_STATE_DIR = "dashboard-data/agent-state"
 
 
+def _identity(platform, channel):
+    """One creator = one claim, regardless of platform.
+
+    Big streamers simulcast the exact same show on Twitch and Kick (xQc,
+    summit1g, …). Keying claims by "platform/channel" let one agent capture
+    the Twitch feed while another captured the identical Kick feed — every
+    moment clipped twice. Handles are therefore compared platform-blind."""
+    return str(channel or "").strip().lstrip("@").lower()
+
+
 def _active_runs_and_slots(my_run_id):
     """Live capture runs → (claims from titles, {slot: set(run_ids)})."""
     if not os.environ.get("GITHUB_REPOSITORY"):
@@ -79,7 +89,7 @@ def _active_runs_and_slots(my_run_id):
             continue
         platform, channel, slot = parsed
         if channel and channel != "auto":
-            claimed.add((platform, channel.lstrip("@").lower()))
+            claimed.add(_identity(platform, channel))
         active_slots.setdefault(slot, set()).add(str(run.get("databaseId")))
     return claimed, active_slots
 
@@ -155,7 +165,7 @@ def _verified_claims(active_slots, my_slot):
             if not fresh:
                 continue
         if doc["channel"]:
-            out[(doc["platform"], doc["channel"])] = {
+            out[_identity(doc["platform"], doc["channel"])] = {
                 "slot": slot, "since": doc["since"], "run_id": doc["run_id"]}
     return out
 
@@ -185,7 +195,7 @@ def _claim_lost(my_run_id, my_slot, platform, channel):
         instead of publishing a duplicate of the rival's work.
     Only claims by OTHER slots with an EARLIER `since` count — if we
     claimed the channel first, it is ours."""
-    key = (platform, str(channel).strip().lstrip("@").lower())
+    key = _identity(platform, channel)
     _, details = _claims_snapshot(my_run_id, my_slot)
     rival = details.get(key)
     if not rival or not rival.get("since"):
@@ -322,7 +332,7 @@ def choose_target(pool, ended_at, opts, my_run_id, retry_after=180,
     claimed, _ = _claims_snapshot(my_run_id, my_slot)
     now = time.time()
     for p, n in pool:
-        key = (p, n.lstrip("@").lower())
+        key = _identity(p, n)
         if now - ended_at.get(key, 0) < retry_after:
             continue                       # it just ended — let it rest
         if key in claimed:
@@ -864,7 +874,7 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
                      p, n)
         # release the claim so the channel is free for the next pick
         dashboard.release_agent_state(slot, my_run_id)
-        ended_at[(p, n.lstrip("@").lower())] = time.time()
+        ended_at[_identity(p, n)] = time.time()
         log.info("%s/%s ended — switching to the next live channel", p, n)
 
         target = None
