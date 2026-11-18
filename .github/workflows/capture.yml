@@ -46,10 +46,12 @@ jobs:
           cache: pip
       - name: Install capture deps
         run: |
-          sudo apt-get update -qq
-          # NOTE: ffmpeg is NOT preinstalled on current runner images
-          sudo apt-get install -y -qq ffmpeg rclone
-          pip install -r requirements-capture.txt
+          # apt and pip run in parallel — capture must start fast
+          (sudo apt-get update -qq &&
+           sudo apt-get install -y -qq ffmpeg rclone) &
+          APT_PID=$!
+          pip install -q -r requirements-capture.txt
+          wait "$APT_PID"
           ffmpeg -version | head -1
           streamlink --version | head -1
       - name: Cache Whisper model
@@ -66,25 +68,43 @@ jobs:
           else
             echo "WARNING: GDRIVE_RCLONE_CONF not set — clips will be kept locally only"
           fi
-      - name: Cache Ollama model
+      - name: Cache Ollama binary + model
         uses: actions/cache@v4
         with:
-          path: ~/.ollama
-          key: ollama-${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
-      - name: Start Ollama (open-source AI clip judge)
+          path: |
+            ~/.ollama
+            ~/.scf-ollama
+          key: ollama-${{ runner.os }}-${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
+      - name: Start AI judge in background
         run: |
-          AI_MODEL="${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}"
-          if ! command -v ollama >/dev/null 2>&1; then
-            curl -fsSL https://ollama.com/install.sh | sh
+          cat > /tmp/ai_setup.sh <<'SH'
+          #!/usr/bin/env bash
+          set -u
+          MODEL="$1"
+          BIN="$HOME/.scf-ollama/bin/ollama"
+          if [ ! -x "$BIN" ]; then
+            mkdir -p "$HOME/.scf-ollama"
+            if curl -fsSL https://ollama.com/download/ollama-linux-amd64.tgz \
+                 -o /tmp/ollama.tgz; then
+              tar -xzf /tmp/ollama.tgz -C "$HOME/.scf-ollama" || true
+            fi
+            if [ ! -x "$BIN" ]; then
+              curl -fsSL https://ollama.com/install.sh | sh
+              BIN="$(command -v ollama)"
+            fi
           fi
-          ollama serve > /tmp/ollama.log 2>&1 &
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434/api/version >/dev/null; then break; fi
+          nohup "$BIN" serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:11434/api/version >/dev/null && break
             sleep 1
           done
-          ollama pull "$AI_MODEL" \
-            || echo "WARNING: model pull failed — clips will publish untitled"
-          ollama list || true
+          "$BIN" pull "$MODEL" || echo "WARNING: model pull failed"
+          echo "AI judge ready: $MODEL"
+          SH
+          chmod +x /tmp/ai_setup.sh
+          nohup /tmp/ai_setup.sh "${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}" \
+            > /tmp/ai_setup.log 2>&1 &
+          echo "AI setup running in background — capture starts immediately"
       - name: Capture stream
         run: |
           python -m streamclip.capture \
@@ -96,5 +116,7 @@ jobs:
           AI_BASE_URL: http://localhost:11434/v1
           AI_MODEL: ${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
           SCF_THRESHOLD: ${{ inputs.threshold }}
+          SCF_PROBE_TIMEOUT: "45"
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

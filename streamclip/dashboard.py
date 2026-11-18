@@ -72,6 +72,36 @@ def put_file(repo: str, path: str, text: str, message: str, token: str) -> int:
 
 
 AGENT_STATE_DIR = "dashboard-data/agent-state"
+OVERRIDE_DIR = "dashboard-data/override"
+
+
+def take_override(slot: str):
+    """Return the dashboard's pending redirect for this slot, then consume it.
+
+    The dashboard writes {"platform", "channel", "ts"} when the user pastes a
+    link + Watch on a running agent. Polling it lets a live agent switch
+    channels in ~20 s instead of a full workflow restart (~1 min).
+    Best-effort: returns None for no file / any error."""
+    try:
+        token = _token()
+        if not token or not slot:
+            return None
+        url = f"{API}/repos/{_repo()}/contents/{OVERRIDE_DIR}/{slot}.json"
+        status, meta = _request("GET", url, token)
+        if status != 200 or not isinstance(meta, dict):
+            return None
+        doc = json.loads(base64.b64decode(meta.get("content", "")).decode())
+        if not isinstance(doc, dict):
+            return None
+        # consume it so the redirect fires exactly once
+        _request("DELETE", url, token, payload={
+            "message": f"override: {slot} consumed",
+            "sha": meta.get("sha"),
+        })
+        return doc
+    except Exception as exc:
+        log.info("dashboard: override check failed: %s", exc)
+        return None
 
 
 def publish_agent_state(slot: str, platform: str, channel: str,
@@ -144,6 +174,7 @@ def publish_clip(entry: dict, drive_dest: str) -> None:
             "title": entry.get("title"),
             "caption": entry.get("caption"),
             "hashtags": entry.get("hashtags"),
+            "quote": entry.get("quote"),
             "stream_t": entry.get("stream_t"),
             "duration": entry.get("duration", 0),
             "created_at": entry.get("created"),

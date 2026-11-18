@@ -248,6 +248,12 @@ select.chip { appearance: none; padding-right: 26px;
   -webkit-box-orient: vertical;
 }
 .clip-title svg { width: 13px; height: 13px; flex: none; color: var(--star); }
+.clip-quote {
+  font-size: 12.5px; line-height: 1.45; color: #ffdf9e;
+  border-left: 2px solid rgba(255, 190, 74, 0.5); padding-left: 8px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .card-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
 .statussel {

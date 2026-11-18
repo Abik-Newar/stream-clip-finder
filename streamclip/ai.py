@@ -1,4 +1,4 @@
-"""Optional LLM second opinion on candidate clips.
+"""Optional LLM judge on candidate clips.
 
 Works with any OpenAI-compatible chat/completions endpoint:
 
@@ -7,15 +7,54 @@ Works with any OpenAI-compatible chat/completions endpoint:
     no cost — the workflow starts the server and caches the weights.
   • Anything else via AI_BASE_URL / AI_MODEL env vars (+ OPENAI_API_KEY).
 
-Best-effort by design: on any failure rank_clip returns None and the clip
-is published untitled — an AI outage must never cost us a clip.
+The bar is deliberately brutal: a clip must contain a real SPOKEN payoff —
+a shocking statement, wild take, confession, threat, absurd story, huge
+reveal or insane reaction. Normal gameplay commentary and filler are
+dropped, so the board never shows bluff clips.
+
+Best-effort by design: on any failure rank_clip returns None and the caller
+decides (strong signal spikes may still publish, weak ones are dropped).
 """
 
 import json
 import logging
 import os
+import re
+import time
 
 log = logging.getLogger("ai")
+
+PROMPT = """You are a ruthless viral-clip judge for live-stream highlights.
+Read the transcript excerpt and answer ONE question: does it contain a moment
+where the streamer actually SAYS something that would stop a stranger from
+scrolling?
+
+A clip passes ONLY if it has a real spoken payoff, for example:
+- a shocking, wild or controversial statement / hot take
+- a confession, threat, insane claim or absurd story
+- a huge reveal, plot twist or genuinely hilarious line
+- an extreme reaction to something that just happened
+
+REJECT (keep=false) normal gameplay commentary, greetings, thanking subs,
+reading donations, filler, silence, and jokes that need missing context.
+Never invent anything. If you cannot quote the payoff line from the
+transcript, it is not a clip.
+
+Score virality 1-10 (10 = would blow up the internet). Be honest: most
+stream talk is 1-3. Only 7+ deserves to be posted.
+
+Answer ONLY with JSON, no markdown:
+{"keep": true|false,
+ "score": 1-10,
+ "quote": "the exact craziest line, copied from the transcript",
+ "title": "3-6 word clickable title",
+ "caption": "1-2 catchy sentences, hook first, no spoilers",
+ "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4"]}
+
+Channel: {channel} ({platform} platform)
+Transcript (stream-relative timestamps):
+{transcript}
+"""
 
 
 def _endpoint():
@@ -31,9 +70,46 @@ def _endpoint():
     return None, None, None                    # AI ranking disabled
 
 
-def rank_clip(transcript_text, channel="", platform=""):
-    """Return {"keep": bool, "title": str, "caption": str, "hashtags": [...]}
-    — or None if unavailable/failed."""
+def _clean(value, limit=300):
+    text = re.sub(r"\s+", " ", str(value or "")).strip().strip('"').strip("'")
+    return text[:limit]
+
+
+def _parse(content, channel=""):
+    """Extract and validate the JSON verdict from an LLM reply."""
+    start, end = content.find("{"), content.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    verdict = json.loads(content[start:end + 1])
+
+    keep = verdict.get("keep")
+    keep = True if keep is None else bool(keep)
+    try:
+        score = float(verdict.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    score = max(0.0, min(10.0, score))
+
+    tags = verdict.get("hashtags")
+    if isinstance(tags, str):
+        tags = tags.split()
+    if isinstance(tags, list):
+        tags = ["#" + str(t).strip().lstrip("#").replace(" ", "")
+                for t in tags if str(t).strip().lstrip("#")]
+        tags = tags[:6]
+
+    return {
+        "keep": keep,
+        "score": round(score, 1),
+        "quote": _clean(verdict.get("quote"), 240),
+        "title": _clean(verdict.get("title"), 90) or channel,
+        "caption": _clean(verdict.get("caption"), 320),
+        "hashtags": " ".join(tags) if tags else "",
+    }
+
+
+def rank_clip(transcript_text, channel="", platform="", wait_s=45):
+    """Judge a clip. Returns a validated verdict dict, or None if unavailable."""
     base, model, key = _endpoint()
     if not base or not transcript_text.strip():
         return None
@@ -42,45 +118,36 @@ def rank_clip(transcript_text, channel="", platform=""):
     except ImportError:
         return None
 
-    prompt = (
-        "You are a viral clip judge for a live-stream highlight tool. "
-        "Decide if this transcript excerpt contains a genuinely funny, epic, "
-        "surprising or hype moment that works as a SHORT STANDALONE clip. "
-        "Judge like TikTok/Reels editors: strong hook in the first seconds, "
-        "a self-contained payoff, real emotion. Be strict: filler, silence "
-        "and inside jokes that need context are NOT clips.\n"
-        "If it is a clip, also write the social copy:\n"
-        "- title: 3-6 word clickable title\n"
-        "- caption: 1-2 catchy sentences with a hook, no spoilers\n"
-        "- hashtags: 4-6 lowercase tags (mix of platform + game/genre + "
-        "viral tags like #clips #streamer #gaming)\n"
-        "Answer ONLY with JSON, no extra text:\n"
-        '{"keep": true|false, "title": "...", "caption": "...", '
-        '"hashtags": ["#tag1", "#tag2"]}\n\n'
-        f"Channel: {channel or 'unknown'} ({platform or 'unknown'} platform)\n"
-        f"Transcript:\n{transcript_text[-3000:]}"
-    )
-    try:
-        r = requests.post(
-            f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {key}",
-                     "Content-Type": "application/json"},
-            json={"model": model,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.3,
-                  "max_tokens": 320},
-            timeout=120)
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
-        content = content[content.find("{"): content.rfind("}") + 1]
-        verdict = json.loads(content)
-        tags = verdict.get("hashtags")
-        if isinstance(tags, str):
-            tags = tags.split()
-        if isinstance(tags, list):
-            tags = ["#" + t.strip().lstrip("#") for t in tags if str(t).strip()]
-            verdict["hashtags"] = " ".join(tags)
-        return verdict
-    except Exception as exc:
-        log.info("AI ranking unavailable (%s) — publishing untitled", exc)
-        return None
+    prompt = PROMPT.format(channel=channel or "unknown",
+                           platform=platform or "unknown",
+                           transcript=transcript_text[-3500:])
+    deadline = time.time() + max(0, wait_s)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            r = requests.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {key}",
+                         "Content-Type": "application/json"},
+                json={"model": model,
+                      "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.2,
+                      "max_tokens": 400},
+                timeout=120)
+            if r.status_code >= 500:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"]
+            verdict = _parse(content, channel)
+            if verdict:
+                return verdict
+            raise ValueError("unparseable verdict")
+        except Exception as exc:
+            # the runner may still be installing Ollama — retry briefly
+            if time.time() < deadline:
+                log.info("AI not ready (%s) — retrying in 3 s", exc)
+                time.sleep(3)
+                continue
+            log.info("AI ranking unavailable (%s) — no verdict", exc)
+            return None

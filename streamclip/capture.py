@@ -254,7 +254,7 @@ def start_segmenter(seg_dir, seg_time, reader=None, source=None, split=None):
                             stderr=subprocess.DEVNULL)
 
 
-def transcribe_worker(q, t0, seg_time, scorer, ring, model_name):
+def transcribe_worker(q, t0, seg_time, scorer, ring, model_name, progress=None):
     tr = None
     while True:
         item = q.get()
@@ -266,17 +266,21 @@ def transcribe_worker(q, t0, seg_time, scorer, ring, model_name):
                 tr = transcribe.Transcriber(model_name)
             base = t0 + (idx - 1) * seg_time
             for seg in tr.transcribe(path):
-                text = seg["text"]
+                text = (seg.get("text") or "").strip()
+                if not text:
+                    continue
+                at = base + seg["start"]
                 result = transcribe.analyze(text)
-                scorer.add_keywords(base + seg["start"], result["score"],
+                scorer.add_keywords(at, result["score"],
                                     command=result["command"])
                 tag = "★ CLIP COMMAND" if result["command"] else "transcript"
-                mm = int(base + seg["start"]) // 60
-                ring.append(f"[{mm:02d}:xx] {tag}: {text}")
+                ring.append((at, tag, text))
                 log.info("%s: %s", tag, text[:120])
         except Exception as exc:  # keep the worker alive
             log.warning("transcription failed: %s", exc)
         finally:
+            if progress is not None:
+                progress[0] = max(progress[0], idx)
             q.task_done()
 
 
@@ -541,17 +545,31 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
     log.info("capturing %s/%s into %s", platform, channel, seg_dir)
 
     tq = queue.Queue(maxsize=64)
+    progress = [0]                     # last segment index Whisper finished
     if opts.transcription:
         threading.Thread(target=transcribe_worker,
                          args=(tq, t0, opts.segment_time, scorer, ring,
-                               opts.whisper_model),
+                               opts.whisper_model, progress),
                          daemon=True).start()
 
     pending = []
     gate = SelectionGate(opts, t0, on_handle=scorer.note_cut)
     last_idx = 0
     result = "ended"
+    redirect = None
     last_claim_check = time.time()
+    last_override_check = time.time()
+
+    def transcript_window(rel_start, rel_end):
+        """Only the lines around this moment — keeps the judge focused."""
+        lo, hi = t0 + rel_start - 8, t0 + rel_end + 6
+        lines = [(at, tag, text) for at, tag, text in list(ring)
+                 if lo <= at <= hi]
+        if len(lines) < 3:             # transcription lag — use the latest
+            lines = list(ring)[-40:]
+        return "\n".join(
+            f"[{int(at) // 60:02d}:{int(at) % 60:02d}] {tag}: {text}"
+            for at, tag, text in lines)
 
     def cut(t_start, t_end, score_val, reason):
         rel_start, rel_end = t_start - t0, t_end - t0
@@ -582,18 +600,40 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             log.info("duplicate dropped: agent %s owns %s (earlier claim)",
                      rival, channel)
             return
-        title = caption = hashtags = None
+        title = caption = hashtags = quote = None
         if opts.ai_ranking:
-            verdict = rank_clip("\n".join(ring), channel, platform)
-            if verdict:
-                log.info("AI verdict: %s", verdict)
-                if verdict.get("keep") is False:
+            # Whisper lags a few seconds behind the video — wait until the
+            # payoff itself is transcribed (max 30 s) so the judge reads the
+            # actual crazy line, not the setup before it.
+            need = int(max(rel_start, rel_end) // opts.segment_time) + 1
+            deadline = time.time() + 30
+            while progress[0] < need and time.time() < deadline \
+                    and not stop.is_set():
+                time.sleep(0.5)
+            verdict = rank_clip(transcript_window(rel_start, rel_end),
+                                channel, platform)
+            if verdict is None:
+                if score_val < opts.threshold * opts.strong_factor:
                     out.unlink(missing_ok=True)
-                    log.info("AI dropped the clip")
+                    log.info("clip dropped: AI unavailable and signal %.2f is "
+                             "not strong enough (no bluff)", score_val)
+                    return
+                log.info("AI unavailable — keeping strong-signal clip")
+            else:
+                vscore = float(verdict.get("score") or 0)
+                log.info("AI verdict: keep=%s score=%.1f quote=%r",
+                         verdict.get("keep"), vscore, verdict.get("quote"))
+                if verdict.get("keep") is False or (
+                        vscore and vscore < opts.ai_min_score):
+                    out.unlink(missing_ok=True)
+                    log.info("AI rejected the clip (score %.1f < %.1f) — "
+                             "not interesting enough", vscore,
+                             opts.ai_min_score)
                     return
                 title = verdict.get("title")
                 caption = verdict.get("caption")
                 hashtags = verdict.get("hashtags")
+                quote = verdict.get("quote")
         if title and opts.title_template:
             try:
                 title = opts.title_template.format(
@@ -602,6 +642,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 title = f"{title}"   # malformed template → keep the raw title
         entry = {"platform": platform, "channel": channel, "file": name,
                  "title": title, "caption": caption, "hashtags": hashtags,
+                 "quote": quote,
                  "score": round(score_val, 2),
                  "trigger": reason,
                  "stream_t": [round(rel_start, 1), round(rel_end, 1)],
@@ -636,6 +677,20 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                          "duplicate capture", platform, channel, rival)
                 result = "lost_claim"
                 break
+
+        # 0b) dashboard redirect — the user pasted a link + Watch on this
+        #     slot. Switch in place (~20 s) instead of restarting the job.
+        if my_slot and now - last_override_check >= 20:
+            last_override_check = now
+            ov = dashboard.take_override(my_slot)
+            if ov and ov.get("platform") == platform:
+                want = str(ov.get("channel") or "").lstrip("@").lower()
+                if want and want != channel.lstrip("@").lower():
+                    log.info("%s: dashboard redirect → %s/%s", my_slot,
+                             platform, want)
+                    redirect = want
+                    result = "redirect"
+                    break
 
         # 1) collect fully written segments (complete once the next exists)
         while True:
@@ -707,6 +762,10 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         log.info("dropping %s buffered clip(s) — the rival agent owns this "
                  "channel now", len(pending))
         pending.clear()
+    elif result == "redirect":
+        log.info("dropping %s buffered clip(s) — dashboard redirected us",
+                 len(pending))
+        pending.clear()
     elif gate.arena:
         a = gate.arena
         pending.append((a["clip"][0], a["clip"][1], a["score"], a["reason"]))
@@ -723,10 +782,40 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
     if stop.is_set():
         result = "stopped"
     log.info("finished %s/%s after %.0fs", platform, channel, time.time() - t0)
-    return result
+    return result, redirect
 
 
 # ---------------------------------------------------------------- supervisor
+
+def _override_target(channels, platform, opts, ended_at, my_run_id, slot):
+    """Take a pending dashboard redirect, if any, as the next target."""
+    ov = dashboard.take_override(slot) if slot else None
+    if not ov or ov.get("platform") != platform or not ov.get("channel"):
+        return None
+    forced = str(ov["channel"])
+    log.info("dashboard redirect → %s/%s", platform, forced)
+    return choose_target(build_pool(channels, platform, forced), ended_at,
+                         opts, my_run_id, my_slot=slot)
+
+
+def _wait_for_target(channels, platform, pool, opts, ended_at, my_run_id,
+                     slot, stop):
+    """Idle in-process for up to idle_retry_seconds, so a channel that goes
+    live (or a pasted link) is grabbed without waiting for a new workflow."""
+    wait_s = max(30, int(opts.idle_retry_seconds))
+    deadline = time.time() + wait_s
+    while not stop.is_set() and time.time() < deadline:
+        target = _override_target(channels, platform, opts, ended_at,
+                                  my_run_id, slot) or \
+            choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
+        if target:
+            return target
+        left = int(deadline - time.time())
+        log.info("no live %s channel yet — retrying in 30 s (%ss left)",
+                 platform, max(0, left))
+        stop.wait(30)
+    return None
+
 
 def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     stop = threading.Event()
@@ -737,6 +826,12 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
 
+    # A link pasted on the dashboard wins over the workflow input.
+    ov = dashboard.take_override(slot) if slot else None
+    if ov and ov.get("platform") == platform and ov.get("channel"):
+        channel = str(ov["channel"])
+        log.info("dashboard override at start → %s/%s", platform, channel)
+
     pool = build_pool(channels, platform, channel)
     log.info("agent %s pool: %s", slot, ", ".join(f"{p}/{n}" for p, n in pool))
     my_run_id = os.environ.get("GITHUB_RUN_ID", "")
@@ -744,28 +839,20 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
 
     target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
     if target is None:
-        # Nothing live right now: retry briefly, then release the runner.
-        # The monitor re-launches enabled slots within its 10-minute tick.
-        for attempt in range(3):
-            log.info("no live channel in the pool yet — retry %s/3 in 30s",
-                     attempt + 1)
-            stop.wait(30)
-            target = choose_target(pool, ended_at, opts, my_run_id,
-                                   my_slot=slot)
-            if target:
-                break
-        if target is None:
-            log.info("nothing live for %s — agent exiting (monitor will retry)",
-                     platform)
-            return 0
+        target = _wait_for_target(channels, platform, pool, opts, ended_at,
+                                  my_run_id, slot, stop)
+    if target is None:
+        log.info("nothing live for %s after %ss — agent exiting (monitor "
+                 "will retry)", platform, opts.idle_retry_seconds)
+        return 0
 
     while not stop.is_set():
         p, n, spec = target
         log.info("▸ agent %s taking %s/%s", slot, p, n)
         rename_run(p, n, slot)
         dashboard.publish_agent_state(slot, p, n, my_run_id)
-        result = capture_channel(p, n, spec, opts, stop,
-                                 my_run_id=my_run_id, my_slot=slot)
+        result, redirect = capture_channel(p, n, spec, opts, stop,
+                                           my_run_id=my_run_id, my_slot=slot)
         if result == "stopped":
             break
         if result == "lost_claim":
@@ -775,10 +862,26 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
         dashboard.publish_agent_state(slot, p, "", my_run_id)
         ended_at[(p, n.lstrip("@").lower())] = time.time()
         log.info("%s/%s ended — switching to the next live channel", p, n)
-        target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
+
+        target = None
+        if result == "redirect" and redirect:
+            # the pasted channel is a one-shot priority pick, still claimed
+            # through the same race-safe path
+            target = choose_target([(p, redirect)], {}, opts, my_run_id,
+                                   my_slot=slot)
+            if target is None:
+                log.info("pasted channel %s/%s is offline — back to the pool",
+                         p, redirect)
         if target is None:
-            log.info("nothing else live for %s — agent exiting (monitor will retry)",
-                     platform)
+            target = _override_target(channels, platform, opts, ended_at,
+                                      my_run_id, slot) or \
+                choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
+        if target is None:
+            target = _wait_for_target(channels, platform, pool, opts, ended_at,
+                                      my_run_id, slot, stop)
+        if target is None:
+            log.info("nothing else live for %s — agent exiting (monitor will "
+                     "retry)", platform)
             break
         stop.wait(5)
     return 0

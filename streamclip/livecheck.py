@@ -21,13 +21,21 @@ import subprocess
 from pathlib import Path
 
 
+def _probe_timeout(default=45):
+    try:
+        return max(10, int(os.environ.get("SCF_PROBE_TIMEOUT") or default))
+    except ValueError:
+        return default
+
+
 def streamlink_json(url):
     """Return the best stream info dict, or None if offline/absent."""
     if not shutil.which("streamlink"):
         return None
     try:
         r = subprocess.run(["streamlink", "--json", url],
-                           capture_output=True, text=True, timeout=90)
+                           capture_output=True, text=True,
+                           timeout=_probe_timeout())
     except subprocess.TimeoutExpired:
         return None
     if r.returncode != 0:
@@ -59,8 +67,12 @@ def yt_dlp_urls(url):
     [video_url, audio_url] when the live only offers split HLS tracks
     (typical for YouTube lives)."""
     try:
-        r = subprocess.run(_yt_dlp_cmd() + ["-g", "-f", "bv*+ba/b", url],
-                           capture_output=True, text=True, timeout=120)
+        r = subprocess.run(_yt_dlp_cmd() + [
+                               "--no-warnings", "--no-playlist",
+                               "--socket-timeout", "15",
+                               "-g", "-f", "bv*+ba/b", url],
+                           capture_output=True, text=True,
+                           timeout=_probe_timeout(60))
     except subprocess.TimeoutExpired:
         return None
     if r.returncode != 0:

@@ -555,7 +555,7 @@ function cardHTML(c) {
     : `<span class="pill pill-warn">${ICONS.clock} ${countdown(c.done_at)}</span>
        <button class="btn btn-ghost btn-sm" data-act="restore" ${busy ? "disabled" : ""}>${ICONS.restore} Restore</button>
        ${c.drive_id
-         ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Watch</button>
+         ? `<button class="videobtn" data-act="play">${ICONS.playCircle} Open</button>
             <a class="videobtn" title="Open in Drive (new tab)" target="_blank" rel="noopener"
                href="https://drive.google.com/file/d/${esc(c.drive_id)}/view">${ICONS.external}</a>`
          : ""}`;
@@ -576,6 +576,7 @@ function cardHTML(c) {
     </div>
     ${c.trigger ? `<div class="trigger-line">${esc(c.trigger)}</div>` : ""}
     ${c.title ? `<div class="clip-title">${ICONS.play}${esc(c.title)}</div>` : ""}
+    ${c.quote ? `<div class="clip-quote">“${esc(c.quote)}”</div>` : ""}
     <div class="card-actions">${actions}</div>
   </article>`;
 }
@@ -722,7 +723,7 @@ function agentTile(slot) {
   const v = slotVisual(slot);
   const busy = state.busy.has(`slot:${slot}`);
   const draft = state.drafts[slot] || "";
-  const parsed = parseStreamUrl(draft);
+  const parsed = parseStreamUrl(draft, v.platform);
   const watchErr = draft
     ? (!parsed ? "not a twitch / kick / youtube link"
       : parsed.platform !== v.platform
@@ -806,17 +807,102 @@ function renderAgents() {
   </div>`;
 }
 
-function parseStreamUrl(raw) {
-  const url = String(raw || "").trim();
-  let m = url.match(/^(?:https?:\/\/)?(?:www\.)?twitch\.tv\/([\w-]{2,})/i);
-  if (m) return { platform: "twitch", name: m[1] };
-  m = url.match(/^(?:https?:\/\/)?(?:www\.)?kick\.com\/([\w-]{2,})/i);
-  if (m) return { platform: "kick", name: m[1] };
-  m = url.match(/^(?:https?:\/\/)?(?:www\.)?youtube\.com\/@([\w.-]{2,})/i);
-  if (m) return { platform: "youtube", name: `@${m[1]}` };
-  m = url.match(/^(?:https?:\/\/)?(?:www\.)?youtube\.com\/channel\/(UC[\w-]{10,})/i);
-  if (m) return { platform: "youtube", name: m[1] };
-  return null;
+/* Reserved first-path segments that are pages, not channels. */
+const URL_RESERVED = {
+  twitch: new Set(["videos", "directory", "search", "settings", "subscriptions",
+    "wallet", "drops", "inventory", "friends", "messages", "clips", "p",
+    "turbo", "creatorcamp", "downloads", "jobs", "store", "collections",
+    "following", "about", "privacy", "terms", "login", "signup"]),
+  kick: new Set(["browse", "categories", "following", "dashboard", "settings",
+    "search", "video", "clips", "communities", "about", "terms", "privacy",
+    "login", "signup", "tags"]),
+};
+
+/**
+ * Parse any live-channel link a user may paste.
+ *   hint = the tile's platform, so a bare channel name ("tarik") also works.
+ * Returns { platform, name } or null. Handles m.twitch.tv, trailing paths,
+ * query strings, /live pages, channel/UC… ids, and bare handles.
+ */
+function parseStreamUrl(raw, hint) {
+  let s = String(raw || "").trim();
+  if (!s) return null;
+
+  // Bare channel name / @handle — only when the tile told us the platform.
+  if (hint && !s.includes("/") && !s.includes(":")) {
+    if (hint === "youtube" && /^@?[\w.-]{2,60}$/.test(s)) {
+      return { platform: "youtube", name: `@${s.replace(/^@/, "")}` };
+    }
+    if (hint !== "youtube" && /^@?[\w-]{2,40}$/.test(s)) {
+      return { platform: hint, name: s.replace(/^@/, "").toLowerCase() };
+    }
+  }
+
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  let u;
+  try { u = new URL(s); } catch { return null; }
+
+  const host = u.hostname.toLowerCase()
+    .replace(/^www\./, "").replace(/^m\./, "").replace(/^music\./, "");
+  const part = decodeURIComponent(u.pathname)
+    .split("/").filter(Boolean);
+
+  if (host === "twitch.tv") {
+    const name = (part[0] || "").replace(/^@/, "");
+    if (!/^[a-z0-9_]{2,25}$/i.test(name)) return null;
+    if (URL_RESERVED.twitch.has(name.toLowerCase())) return null;
+    return { platform: "twitch", name: name.toLowerCase() };
+  }
+
+  if (host === "kick.com") {
+    const name = (part[0] || "").replace(/^@/, "");
+    if (!/^[a-z0-9_-]{2,40}$/i.test(name)) return null;
+    if (URL_RESERVED.kick.has(name.toLowerCase())) return null;
+    return { platform: "kick", name: name.toLowerCase() };
+  }
+
+  if (host === "youtube.com") {
+    if (part[0] === "channel" && /^UC[\w-]{10,}$/.test(part[1] || "")) {
+      return { platform: "youtube", name: part[1] };
+    }
+    if (part[0] && part[0].startsWith("@")) {
+      if (/^@[\w.-]{2,60}$/.test(part[0])) {
+        return { platform: "youtube", name: part[0] };
+      }
+      return null;
+    }
+    if ((part[0] === "c" || part[0] === "user") && part[1]) {
+      if (/^[\w.-]{2,60}$/.test(part[1])) {
+        return { platform: "youtube", name: `@${part[1]}` };
+      }
+    }
+    return null;                       // /watch, /shorts, /playlist …
+  }
+
+  return null;                         // youtu.be, other sites
+}
+
+/* Redirect a live agent to a pasted channel without restarting its job.
+   The capture process polls dashboard-data/override/<slot>.json every ~20 s
+   and switches in place (claims still enforced). */
+async function writeOverride(slot, platform, channel) {
+  const path = `dashboard-data/override/${slot}.json`;
+  let sha;
+  try {
+    const cur = await gh(`/repos/${REPO}/contents/${path}`);
+    sha = cur && cur.sha;
+  } catch (err) {
+    if (err.status !== 404) throw err;
+  }
+  const doc = { slot, platform, channel, ts: new Date().toISOString() };
+  await gh(`/repos/${REPO}/contents/${path}`, {
+    method: "PUT",
+    body: {
+      message: `override: ${slot} → ${platform}/${channel}`,
+      content: b64encode(JSON.stringify(doc, null, 2) + "\n"),
+      sha,
+    },
+  });
 }
 
 function render() {
@@ -847,7 +933,8 @@ function openPlayer(clip) {
   const hashtags = Array.isArray(clip.hashtags)
     ? clip.hashtags.join(" ")
     : String(clip.hashtags || "");
-  const copyMeta = metaBlock("Title", clip.title, "title") +
+  const copyMeta = metaBlock("Quote", clip.quote, "quote") +
+    metaBlock("Title", clip.title, "title") +
     metaBlock("Caption", clip.caption, "caption") +
     metaBlock("Hashtags", hashtags, "hashtags");
   const root = $("#modal-root");
@@ -989,17 +1076,18 @@ document.addEventListener("click", async (event) => {
     }
 
     if (action === "watch") {
-      // lock this exact agent to the pasted channel — dispatches into the
-      // SLOT (never a generic "manual" run), so the claim system applies
+      // Lock this exact agent to the pasted channel. If it is already
+      // running, an override file redirects it in place (~20 s); only a
+      // stopped slot needs a new workflow run.
       const platform = slotPlatform(slot);
-      const parsed = parseStreamUrl(state.drafts[slot] || "");
+      const parsed = parseStreamUrl(state.drafts[slot] || "", platform);
       if (!parsed || parsed.platform !== platform) {
         toast(parsed
           ? `This is a ${platform} agent — paste a ${platform} link`
           : "Paste a twitch / kick / youtube link first", "err");
         return;
       }
-      const oldRuns = state.runs.filter((r) => r.slot === slot);
+      const liveRun = state.runs.find((r) => r.slot === slot);
       state.busy.add(`slot:${slot}`);
       if (state.agentsDoc) {
         state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
@@ -1008,17 +1096,20 @@ document.addEventListener("click", async (event) => {
       state.stopping.delete(slot);
       state.runs = state.runs.filter((r) => r.slot !== slot);
       state.runs.push({ slot, platform, channel: parsed.name,
-        status: "queued", id: 0, created: new Date().toISOString() });
+        status: liveRun ? liveRun.status : "queued", id: liveRun ? liveRun.id : 0,
+        created: new Date().toISOString() });
       render();
       try {
-        await saveSlot(slot, true);
-        await dispatchCapture(platform, slot, parsed.name);
-        // cancel leftover runs of this slot (redirect case) — the concurrency
-        // group also auto-cancels the previous run of the same slot
-        for (const r of oldRuns) {
-          try { await cancelRun(r.id); } catch { /* best effort */ }
+        await Promise.all([
+          saveSlot(slot, true),
+          writeOverride(slot, platform, parsed.name),
+        ]);
+        if (!liveRun) {
+          await dispatchCapture(platform, slot, parsed.name);
+          toast(`${slot} started — watching ${platform}/${parsed.name}`, "ok");
+        } else {
+          toast(`${slot} switching to ${platform}/${parsed.name} (~20 s)`, "ok");
         }
-        toast(`${slot} is now watching ${platform}/${parsed.name}`, "ok");
         setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
       } catch (err) {
         toast(`Failed: ${err.message}`, "err");
@@ -1175,7 +1266,7 @@ document.addEventListener("input", (event) => {
   if (!inp) return;
   const slot = inp.dataset.watchurl;
   state.drafts[slot] = inp.value;
-  const parsed = parseStreamUrl(inp.value);
+  const parsed = parseStreamUrl(inp.value, platform);
   const platform = slotPlatform(slot);
   const err = document.querySelector(`[data-watcherr="${slot}"]`);
   const btn = document.querySelector(`button[data-slotact="watch"][data-slot="${slot}"]`);

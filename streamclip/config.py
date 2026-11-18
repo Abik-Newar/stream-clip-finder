@@ -49,7 +49,12 @@ class Options:
     transcription: bool = True
     whisper_model: str = "base"
     ai_ranking: bool = True        # open-source LLM (Ollama) judges + titles clips
+    ai_min_score: float = 6.5      # 1-10 virality bar — below this the clip is dropped
     title_template: str = ""       # e.g. "🔥 {channel} — {title}" (empty = raw AI title)
+
+    # Speed / resilience
+    probe_timeout: int = 45        # seconds per channel live-check
+    idle_retry_seconds: int = 600  # how long an agent waits for a live channel
 
     # Google Drive
     drive_remote: str = "gdrive"

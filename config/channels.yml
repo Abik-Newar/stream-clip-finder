@@ -13,7 +13,13 @@
 # Add your real channels below — top of the list = highest priority.
 
 channels:
-  # --- Twitch (live right now, good for testing) ---
+  # --- Twitch (top of list = highest priority) ---
+  - platform: twitch
+    name: xqc
+    enabled: true
+  - platform: twitch
+    name: summit1g
+    enabled: true
   - platform: twitch
     name: jynxzi
     enabled: true
@@ -26,10 +32,10 @@ channels:
 
   # --- Kick: picked up automatically whenever they are live ---
   - platform: kick
-    name: rachitroo_1
+    name: xqc
     enabled: true
   - platform: kick
-    name: xqc
+    name: rachitroo_1
     enabled: true
   - platform: kick
     name: trainwreckstv
@@ -37,9 +43,20 @@ channels:
   - platform: kick
     name: iceposeidon
     enabled: true
+  - platform: kick
+    name: adinross
+    enabled: true
+  - platform: kick
+    name: n3on
+    enabled: true
 
-  # - platform: youtube
-  #   name: "@handle"      # YouTube needs the YT_COOKIES secret (bot-check)
+  # --- YouTube: needs the YT_COOKIES secret on datacenter runners ---
+  - platform: youtube
+    name: "@SkyNews"
+    enabled: true
+  - platform: youtube
+    name: "@LofiGirl"
+    enabled: true
 
 options:
   # Clip geometry — hook-first cuts (viral research: hook in the first 2-3 s,
@@ -76,15 +93,19 @@ options:
   overlap_iou: 0.3       # reject cuts overlapping a recent clip
   quiet_decay: 0.97      # threshold decay step during quiet stretches
 
+  # Intelligence — only real spoken payoffs reach the board
+  transcription: true    # Whisper transcript feeds the judge
+  whisper_model: base    # tiny | base | small (small = best, slowest)
+  ai_ranking: true       # open-source LLM (Ollama on the runner) judges clips
+  ai_min_score: 6.5      # 1-10 virality bar; below this the clip is dropped
+  title_template: ""     # title format for every clip, e.g. "🔥 {channel} — {title}"
+
+  # Speed — pickup + idle patience
+  probe_timeout: 45      # seconds per channel live-check
+  idle_retry_seconds: 600  # idle agents keep looking for 10 min before exiting
+
   # Storage
   keep_buffer: 900       # seconds of segments kept on disk
-
-  # Intelligence
-  transcription: true    # Whisper transcript keywords (uses more CPU)
-  whisper_model: base    # tiny | base | small (small = best, slowest)
-  ai_ranking: true       # open-source LLM (Ollama on the runner) judges + titles clips
-  title_template: ""     # title format for every clip, e.g. "🔥 {channel} — {title}"
-                         # placeholders: {channel} {platform} {title} — empty = raw AI title
 
   # Google Drive
   drive_remote: gdrive
