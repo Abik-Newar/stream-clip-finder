@@ -1109,10 +1109,11 @@ document.addEventListener("click", async (event) => {
         status: "queued", id: 0, created: new Date().toISOString() });
       render();
       try {
-        await Promise.all([
-          saveSlot(slot, true),
-          writeOverride(slot, platform, parsed.name),
-        ]);
+        // Bookkeeping is best-effort; the dispatch below is the actual
+        // watch action and must never be skipped because a commit raced.
+        try { await saveSlot(slot, true); } catch { /* cosmetic */ }
+        try { await writeOverride(slot, platform, parsed.name); }
+        catch { /* dispatch carries the channel anyway */ }
         await dispatchCapture(platform, slot, parsed.name);
         toast(`${slot} watching ${platform}/${parsed.name}`, "ok");
         setTimeout(() => loadAgents().then(render).catch(() => {}), 4000);
