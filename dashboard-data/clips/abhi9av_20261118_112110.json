@@ -1,5 +1,5 @@
 {
-  "caption": "Pipeline test: 20s recorded live from kick/abhi9av.",
+  "caption": "Pipeline test: 20s recorded live from kick/abhi9av. \u2014 GTA6",
   "channel": "abhi9av",
   "clip_key": "abhi9av_20261118_112110",
   "created_at": "2026-11-18T11:21:33.547399+00:00",
@@ -8,7 +8,7 @@
   "drive_path": "gdrive:StreamClips/abhi9av/2026-11-18/abhi9av_20261118_112110.mp4",
   "duration": 20.0,
   "file": "abhi9av_20261118_112110.mp4",
-  "hashtags": "#clips #test #streamer",
+  "hashtags": "#GTA6 #clips #test #streamer",
   "platform": "kick",
   "quote": "Test clip \u2014 captured, uploaded and linked from the live stream.",
   "score": 1.0,
@@ -18,6 +18,6 @@
     0.0,
     20.0
   ],
-  "title": "TEST CLIP \u2014 abhi9av",
+  "title": "TEST CLIP \u2014 abhi9av | GTA6",
   "trigger": "manual pipeline test"
 }
