@@ -1,0 +1,58 @@
+name: test-clip
+run-name: test-clip|${{ inputs.platform }}|${{ inputs.channel }}
+
+# Pipeline check for a LIVE channel: records a short clip from the live edge,
+# uploads it to Drive through the normal path, and publishes a dashboard task.
+# It does NOT dispatch, redirect or stop any capture agent — safe while an
+# agent is watching the same channel.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "twitch | kick | youtube"
+        required: true
+        default: "kick"
+      channel:
+        description: "Channel/handle (YouTube keeps the @)"
+        required: true
+      seconds:
+        description: "Clip length in seconds"
+        required: false
+        default: "20"
+
+permissions:
+  contents: write
+
+jobs:
+  testclip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg rclone
+          pip install -q -r requirements.txt
+          ffmpeg -version | head -1
+      - name: Restore rclone config
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.GDRIVE_RCLONE_CONF }}" | base64 -d \
+            > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+      - name: Record + upload test clip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          python -m streamclip.testclip \
+            --platform "${{ inputs.platform }}" \
+            --channel "${{ inputs.channel }}" \
+            --seconds "${{ inputs.seconds }}"
