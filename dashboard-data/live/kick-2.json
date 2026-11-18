@@ -1,10 +1,10 @@
 {
   "accepted": 8,
   "arena_score": 2.86,
-  "candidates": 116,
+  "candidates": 136,
   "channel": "vanshajsingh",
   "chat_connected": true,
-  "chat_messages": 617,
+  "chat_messages": 625,
   "clips": 3,
   "last_ai": "keep=True score=8.0",
   "last_candidate_score": 2.65,
@@ -12,10 +12,10 @@
   "last_error": null,
   "platform": "kick",
   "run_id": "44308166619",
-  "seconds": 2337,
-  "segments": 233,
+  "seconds": 2383,
+  "segments": 237,
   "slot": "kick-2",
   "state": "watching",
-  "threshold": 2.33,
-  "updated": "2026-11-18T13:33:23.408879+00:00"
+  "threshold": 2.47,
+  "updated": "2026-11-18T13:34:09.174699+00:00"
 }
