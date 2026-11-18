@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import time
@@ -56,19 +57,39 @@ def _request(method: str, url: str, token: str, payload=None,
         return res.status, body
 
 
+def _backoff(attempt: int) -> None:
+    """Jittered exponential backoff — 9 agents commit claims at once, so a
+    flat retry loses the same branch-head race over and over."""
+    time.sleep(min(5.0, 0.4 * (2 ** attempt)) + random.random())
+
+
 def put_file(repo: str, path: str, text: str, message: str, token: str) -> int:
-    """Create or update a file via the contents API (sha-aware)."""
+    """Create or update a file via the contents API (sha-aware).
+
+    The first PUT has no SHA (create). If the file already exists it
+    answers 422, then we read the blob SHA and update. Concurrent agents
+    commit to the same branch, so update PUTs can answer 409 ("is at X but
+    expected Y"); re-read the SHA and retry with jitter."""
     url = f"{API}/repos/{repo}/contents/{path}"
     content = base64.b64encode(text.encode()).decode()
     status, _ = _request("PUT", url, token, payload={
         "message": message, "content": content})
     if status in (200, 201):
         return status
-    # 422 = already exists → fetch its sha and update instead
-    status_get, data = _request("GET", url, token)
-    if status_get == 200 and isinstance(data, dict) and data.get("sha"):
-        status, _ = _request("PUT", url, token, payload={
-            "message": message, "content": content, "sha": data["sha"]})
+    if status != 422 and status != 409:
+        return status
+    for attempt in range(6):
+        status_get, data = _request("GET", url, token)
+        if status_get == 200 and isinstance(data, dict) and data.get("sha"):
+            status, body = _request("PUT", url, token, payload={
+                "message": message, "content": content,
+                "sha": data["sha"]})
+            if status in (200, 201):
+                return status
+            if status != 409:
+                log.info("dashboard: %s write → HTTP %s %r", path, status, body)
+                return status
+        _backoff(attempt)
     return status
 
 
@@ -146,7 +167,7 @@ def _update_claim(slot: str, message: str, make_doc, allow=None) -> bool:
     if not token or not slot:
         return False
     url = f"{API}/repos/{_repo()}/contents/{AGENT_STATE_DIR}/{slot}.json"
-    for attempt in range(3):
+    for attempt in range(6):
         status, meta = _request("GET", url, token)
         if status != 200 or not isinstance(meta, dict):
             return False
@@ -165,7 +186,7 @@ def _update_claim(slot: str, message: str, make_doc, allow=None) -> bool:
             return True
         log.info("dashboard: claim write %s → HTTP %s %r — retrying",
                  slot, code, body)
-        time.sleep(1 + attempt)
+        _backoff(attempt)
     return False
 
 

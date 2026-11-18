@@ -10,6 +10,7 @@ This monitor re-launches the slot on its next 10-minute tick.
 import json
 import os
 import subprocess
+import time
 
 SLOT_PLATFORM = {f"{p}-{i}": p for p in ("twitch", "kick", "youtube")
                  for i in (1, 2, 3)}
@@ -84,6 +85,7 @@ def main():
     running = active_runs()
     enabled = [s for s, cfg in slots.items() if cfg["enabled"]]
     print(f"slots: {len(enabled)} enabled, {len(running)} agents running")
+    dispatched = 0
     for slot in sorted(slots):
         cfg = slots[slot]
         platform = cfg["platform"] or SLOT_PLATFORM.get(slot)
@@ -97,7 +99,12 @@ def main():
             p, ch = running[slot]
             print(f"{slot}: running on {p}/{ch or 'auto'}")
             continue
+        if dispatched:
+            # stagger starts: every agent commits a claim on startup, and a
+            # simultaneous burst makes the contents API lose SHA races
+            time.sleep(8)
         dispatch(platform, slot)
+        dispatched += 1
 
 
 if __name__ == "__main__":
