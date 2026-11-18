@@ -81,6 +81,9 @@ def yt_dlp_urls(url):
         if "Sign in to confirm" in detail or "not a bot" in detail:
             detail += ("  → YouTube bot-check: this IP needs cookies. "
                        "Set the YT_COOKIES secret (see README).")
+        elif "n challenge" in detail or "No video formats" in detail:
+            detail += ("  → YouTube JS challenge: the runner needs Deno + "
+                       "yt-dlp[default] (capture.yml installs both).")
         print(f"[livecheck] yt-dlp could not extract {url}: {detail}")
         return None
     return [l for l in r.stdout.splitlines() if l.startswith("http")] or None

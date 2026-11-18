@@ -19,9 +19,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - name: Install tools
         run: |
-          pip install -q yt-dlp streamlink
+          pip install -q "yt-dlp[default]" streamlink
           sudo apt-get update -qq && sudo apt-get install -y -qq rclone ffmpeg
           ffmpeg -version | head -1
           streamlink --version | head -1

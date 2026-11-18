@@ -149,40 +149,35 @@ dashboard: paste link + Watch
 - **Fresh baseline per channel:** switching channels resets the scorer, so
   each stream is judged against its own normal chat pace.
 
-## Start / Stop — full control, one click
+## Start / Stop — one link at a time
 
-The system only runs when **you** turn it on:
+Nothing runs until **you** give an agent a link:
 
 | Action | How (no terminal needed) | Effect |
 |---|---|---|
-| **▶ START** | GitHub repo → **Actions** tab → **"stream-clip ▶ START"** → Run workflow | Enables the scheduler, immediately spins up agents for any live channel |
-| **■ STOP** | Actions tab → **"stream-clip ■ STOP"** → Run workflow | Disables the scheduler **and kills every running agent** within seconds |
-| Freeze only | Settings → Actions → Variables → `SCF_RUNNING` = `false` | Scheduler skips its work, running agents keep going |
-| Per-channel off | Set `enabled: false` on that channel in `config/channels.yml` | Channel skipped, rest keep running |
+| **Watch one agent** | ClipDesk → paste a Twitch / Kick / YouTube live link in the tile → **Watch** | Dispatches one capture job for that exact slot + channel |
+| **■ Stop one agent** | ClipDesk → **Stop** on that tile | Cancels that agent's run within seconds |
+| **■ Stop everything** | ClipDesk → **Stop all** | Cancels every capture run |
+| Freeze the cleaner | Settings → Actions → Variables → `SCF_RUNNING` = `false` | Skips the old-task purge; running agents keep going |
 
 From your Mac it's the same thing: `./start.sh` and `./stop.sh`.
 
-When stopped, nothing runs and nothing costs anything. When started, agents
-run until the stream ends (or you stop them).
+When nothing is watched, nothing runs and nothing costs anything. An agent
+stops by itself when its live ends.
 
-## Add your own channels
+## Add your own agents
 
-Edit `config/channels.yml` and push:
+ClipDesk has 9 built-in agents (3 per platform). Press **+ Add agent**, pick a
+platform, and its tile appears — then paste a link and press **Watch**.
 
-```yaml
-channels:
-  - platform: twitch      # twitch | kick | youtube
-    name: your_channel
-    enabled: true
-```
-
-Up to `max_concurrent` (default 6) channels get their own agent. Then press
-**▶ START**.
+`config/channels.yml` is legacy tuning for the old auto mode; manual mode never
+reads a channel pool.
 
 **Platform notes (verified from GitHub runner IPs):**
 - **Twitch** — works out of the box (streamlink + anonymous chat) ✅
 - **Kick** — capture works; chat may be blocked by Kick's API on datacenter IPs
 - **YouTube** — needs cookies (run `./export_yt_cookies.sh` once) ⚠️
+  The capture workflow installs Deno + the yt-dlp solver scripts automatically.
 
 ## Quick start
 

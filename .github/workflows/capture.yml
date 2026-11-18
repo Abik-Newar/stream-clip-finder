@@ -44,6 +44,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Install Deno (YouTube JS challenge solver)
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - name: Cache CLI binaries
         uses: actions/cache@v4
         with:
