@@ -95,9 +95,10 @@ jobs:
           BIN="$HOME/.scf-ollama/bin/ollama"
           if [ ! -x "$BIN" ]; then
             mkdir -p "$HOME/.scf-ollama"
-            if curl -fsSL https://ollama.com/download/ollama-linux-amd64.tgz \
-                 -o /tmp/ollama.tgz; then
-              tar -xzf /tmp/ollama.tgz -C "$HOME/.scf-ollama" || true
+            if curl -fsSL \
+                 https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst \
+                 -o /tmp/ollama.tar.zst; then
+              tar --zstd -xf /tmp/ollama.tar.zst -C "$HOME/.scf-ollama" || true
             fi
             if [ ! -x "$BIN" ]; then
               curl -fsSL https://ollama.com/install.sh | sh

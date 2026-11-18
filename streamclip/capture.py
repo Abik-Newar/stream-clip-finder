@@ -84,7 +84,7 @@ def _active_runs_and_slots(my_run_id):
     return claimed, active_slots
 
 
-_CLAIM_FRESH_S = 1200          # unverified claims trusted for 20 min
+_CLAIM_FRESH_S = 300           # fresh claims trusted for 5 min (run-list lag)
 
 
 def _read_agent_state():
@@ -127,29 +127,32 @@ def _read_agent_state():
 
 
 def _verified_claims(active_slots, my_slot):
-    """Channels held by other agents whose runs are still active → details.
+    """Channels held by other agents that still count as claimed.
 
-    A claim counts only while its run is alive, so dead agents' claims
-    expire automatically. If the run list is unavailable (API hiccup),
-    very fresh claims are still trusted — a false block costs a little
-    idle time, a missed claim costs a double capture."""
+    A claim counts when its run is active. The run-list API lags a few
+    seconds behind a just-started agent, so a FRESH claim is also trusted
+    even when its run is not listed yet — that closes the 3-second race
+    that let two Kick agents claim the same channel. Older claims from dead
+    runs expire, so crashed agents don't block channels forever."""
     out = {}
     now = datetime.now(timezone.utc)
     for doc in _read_agent_state():
         slot = doc["slot"]
         if slot == my_slot:
             continue
+        matched = False
         if active_slots:
-            if slot not in active_slots:
-                continue
-            if doc["run_id"] and doc["run_id"] not in active_slots.get(slot, set()):
-                continue
-        elif doc["since"]:
+            if slot in active_slots and (
+                    not doc["run_id"]
+                    or doc["run_id"] in active_slots[slot]):
+                matched = True
+        if not matched:
             try:
                 t = datetime.fromisoformat(doc["since"].replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            if (now - t).total_seconds() > _CLAIM_FRESH_S:
+                fresh = (now - t).total_seconds() <= _CLAIM_FRESH_S
+            except (ValueError, TypeError):
+                fresh = False
+            if not fresh:
                 continue
         if doc["channel"]:
             out[(doc["platform"], doc["channel"])] = {
