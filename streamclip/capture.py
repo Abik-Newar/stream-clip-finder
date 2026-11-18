@@ -13,6 +13,7 @@ Flow:
 """
 
 import argparse
+import base64
 import json
 import logging
 import os
@@ -70,19 +71,28 @@ def _active_runs_and_slots(my_run_id):
     Only `in_progress` runs count. A `queued` run has not claimed or
     captured anything yet — and GitHub can leave a re-queued job pending
     for a long time, so trusting it made one stuck run block a creator
-    forever (seen live: a queued kick-1 held xQc while nobody captured)."""
+    forever (seen live: a queued kick-1 held xQc while nobody captured).
+    The list is cached for 45 s: every agent polls it, and the shared
+    installation token has a 5 000/h budget."""
+    global _RUNS_CACHE
     if not os.environ.get("GITHUB_REPOSITORY"):
         return set(), {}
-    try:
-        r = subprocess.run(
-            ["gh", "run", "list", "--workflow", "capture.yml", "--limit", "30",
-             "--json", "databaseId,status,displayTitle"],
-            capture_output=True, text=True, timeout=60)
-        if r.returncode != 0:
+    now = time.time()
+    if _RUNS_CACHE["data"] is not None and now - _RUNS_CACHE["at"] < 45:
+        data = _RUNS_CACHE["data"]
+    else:
+        try:
+            r = subprocess.run(
+                ["gh", "run", "list", "--workflow", "capture.yml",
+                 "--limit", "30",
+                 "--json", "databaseId,status,displayTitle"],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                return set(), {}
+            data = json.loads(r.stdout or "[]")
+        except Exception:
             return set(), {}
-        data = json.loads(r.stdout or "[]")
-    except Exception:
-        return set(), {}
+        _RUNS_CACHE = {"at": now, "data": data}
     claimed, active_slots = set(), {}
     for run in data:
         if str(run.get("databaseId")) == str(my_run_id):
@@ -99,45 +109,75 @@ def _active_runs_and_slots(my_run_id):
     return claimed, active_slots
 
 
+_RUNS_CACHE = {"at": 0.0, "data": None}
+
+
 _CLAIM_FRESH_S = 300           # fresh claims trusted for 5 min (run-list lag)
+_STATE_LIST = {"at": 0.0, "names": []}
+_STATE_DOCS: dict[str, dict] = {}
+KNOWN_SLOTS = [f"{p}-{i}" for p in ("twitch", "kick", "youtube")
+               for i in (1, 2, 3)] + ["manual"]
 
 
-def _read_agent_state():
-    """All agent-state claim files → dicts with slot/platform/channel/since."""
+def _agent_state_names():
+    """File names in agent-state/, cached 2 min (one API call per agent)."""
+    now = time.time()
+    if _STATE_LIST["names"] and now - _STATE_LIST["at"] < 120:
+        return _STATE_LIST["names"]
     repo = os.environ.get("GITHUB_REPOSITORY")
-    if not repo:
-        return []
     try:
         r = subprocess.run(
             ["gh", "api", f"repos/{repo}/contents/{AGENT_STATE_DIR}",
              "-H", "Accept: application/vnd.github+json"],
             capture_output=True, text=True, timeout=60)
-        if r.returncode != 0:
-            return []
-        entries = json.loads(r.stdout or "[]")
+        if r.returncode == 0:
+            entries = json.loads(r.stdout or "[]")
+            names = [e.get("name", "") for e in entries
+                     if e.get("name", "").endswith(".json")]
+            if names:
+                _STATE_LIST.update(at=now, names=names)
+                return names
     except Exception:
+        pass
+    # API unavailable or rate-limited: fall back to the built-in slots so
+    # duplicate protection keeps working from the cached claim docs.
+    return _STATE_LIST["names"] or [f"{s}.json" for s in KNOWN_SLOTS]
+
+
+def _read_agent_state():
+    """All agent-state claim files → dicts with slot/platform/channel/since.
+
+    Reads use ETag conditional requests: unchanged files answer 304, which
+    GitHub does not charge against the API quota. That keeps nine agents
+    polling claims 24/7 inside the 5 000/h installation budget."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return []
+    token = dashboard._token()
+    if not token:
         return []
     docs = []
-    for entry in entries:
-        name = entry.get("name", "")
-        if not name.endswith(".json"):
+    for name in _agent_state_names():
+        path = f"{AGENT_STATE_DIR}/{name}"
+        status, meta = dashboard.get_file(path, token)
+        if status not in (200, 304) or not isinstance(meta, dict):
+            continue
+        content = meta.get("content")
+        if content is None:
             continue
         try:
-            r2 = subprocess.run(
-                ["gh", "api", f"repos/{repo}/contents/{AGENT_STATE_DIR}/{name}",
-                 "-H", "Accept: application/vnd.github.raw"],
-                capture_output=True, text=True, timeout=60)
-            doc = json.loads(r2.stdout or "{}")
+            doc = json.loads(base64.b64decode(content).decode())
         except Exception:
             continue
-        docs.append({
-            "slot": name[:-5],
-            "platform": doc.get("platform"),
-            "channel": str(doc.get("channel") or "").strip()
-                       .lstrip("@").lower(),
-            "since": str(doc.get("since") or ""),
-            "run_id": str(doc.get("run_id") or ""),
-        })
+        if isinstance(doc, dict):
+            docs.append({
+                "slot": name[:-5],
+                "platform": doc.get("platform"),
+                "channel": str(doc.get("channel") or "").strip()
+                           .lstrip("@").lower(),
+                "since": str(doc.get("since") or ""),
+                "run_id": str(doc.get("run_id") or ""),
+            })
     return docs
 
 
@@ -353,6 +393,13 @@ def choose_target(pool, ended_at, opts, my_run_id, retry_after=180,
         # commit our claim, then check we were first to the channel
         my_since = dashboard.publish_agent_state(my_slot or "slot", p, n,
                                                  my_run_id)
+        if not my_since and my_slot:
+            # Never capture without a committed claim: if the API is down,
+            # two agents could otherwise pick the same creator and cut
+            # duplicate clips. Waiting is always safer than duplicating.
+            log.warning("%s: claim write failed — not taking %s/%s",
+                        my_slot, p, n)
+            continue
         if my_since:
             time.sleep(3)                  # let a racing agent commit too
             claimed, details = _claims_snapshot(my_run_id, my_slot)

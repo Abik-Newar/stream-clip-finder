@@ -96,6 +96,52 @@ def put_file(repo: str, path: str, text: str, message: str, token: str) -> int:
 AGENT_STATE_DIR = "dashboard-data/agent-state"
 OVERRIDE_DIR = "dashboard-data/override"
 
+# ETag cache: conditional contents-API GETs that answer 304 are FREE
+# (GitHub does not charge them against the primary rate limit). The nine
+# agents polled ~10 endpoints every 30 s, which exhausted the installation
+# token and made monitor dispatches fail with HTTP 403.
+_ETAGS: dict[str, str] = {}
+_FILE_DOCS: dict[str, dict] = {}
+_MISS_UNTIL: dict[str, float] = {}
+
+
+def get_file(path: str, token: str) -> tuple[int, dict | None]:
+    """Contents-API GET with ETag caching. Returns (status, meta).
+
+    304 → cached meta is returned with status 304 (free). 404s are cached
+    briefly so idle override polls don't burn quota either."""
+    if time.time() < _MISS_UNTIL.get(path, 0):
+        return 404, None
+    url = f"{API}/repos/{_repo()}/contents/{path}"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", "clipdesk-agent")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    etag = _ETAGS.get(path)
+    if etag:
+        req.add_header("If-None-Match", etag)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            body = res.read()
+            new_etag = res.headers.get("ETag")
+            if new_etag:
+                _ETAGS[path] = new_etag
+            _MISS_UNTIL.pop(path, None)
+            meta = json.loads(body) if body else None
+            if isinstance(meta, dict):
+                _FILE_DOCS[path] = meta
+            return res.status, meta
+    except urllib.error.HTTPError as exc:
+        if exc.code == 304:
+            return 304, _FILE_DOCS.get(path)
+        if exc.code == 404:
+            _MISS_UNTIL[path] = time.time() + 20
+        return exc.code, None
+    except Exception as exc:
+        log.info("dashboard: GET %s failed: %s", path, exc)
+        return 0, None
+
 
 def take_override(slot: str):
     """Return the dashboard's pending redirect for this slot, then consume it.
@@ -108,14 +154,16 @@ def take_override(slot: str):
         token = _token()
         if not token or not slot:
             return None
-        url = f"{API}/repos/{_repo()}/contents/{OVERRIDE_DIR}/{slot}.json"
-        status, meta = _request("GET", url, token)
+        path = f"{OVERRIDE_DIR}/{slot}.json"
+        status, meta = get_file(path, token)
+        # 304 = unchanged since the last poll → nothing new to consume
         if status != 200 or not isinstance(meta, dict):
             return None
         doc = json.loads(base64.b64decode(meta.get("content", "")).decode())
         if not isinstance(doc, dict):
             return None
         # consume it so the redirect fires exactly once
+        url = f"{API}/repos/{_repo()}/contents/{path}"
         _request("DELETE", url, token, payload={
             "message": f"override: {slot} consumed",
             "sha": meta.get("sha"),

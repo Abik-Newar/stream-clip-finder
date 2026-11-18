@@ -45,17 +45,21 @@ def load_slots(repo) -> dict:
     }
 
 
-def active_runs() -> dict:
-    """slot → (platform, channel) for running capture agents."""
+def active_runs():
+    """slot → (platform, channel) for running capture agents, or None.
+
+    None means the API call failed. That MUST abort the tick: treating a
+    failed listing as "nothing is running" dispatched all nine slots into
+    an exhausted quota and produced a storm of 403s."""
     r = _gh("run", "list", "--workflow", "capture.yml", "--limit", "40",
             "--json", "displayTitle,status")
     if r.returncode != 0:
-        return {}
+        return None
     out = {}
     try:
         runs = json.loads(r.stdout or "[]")
     except json.JSONDecodeError:
-        return {}
+        return None
     for run in runs:
         if (run.get("status") or "") not in ("in_progress", "queued"):
             continue
@@ -83,6 +87,9 @@ def main():
     if not slots:
         return
     running = active_runs()
+    if running is None:
+        print("run list failed (API budget?) — not dispatching this tick")
+        return
     enabled = [s for s, cfg in slots.items() if cfg["enabled"]]
     print(f"slots: {len(enabled)} enabled, {len(running)} agents running")
     dispatched = 0
