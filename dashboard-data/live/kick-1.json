@@ -12,10 +12,10 @@
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308153389",
-  "seconds": 1526,
-  "segments": 152,
+  "seconds": 1572,
+  "segments": 157,
   "slot": "kick-1",
   "state": "watching",
-  "threshold": 2.33,
-  "updated": "2026-11-18T13:19:41.093254+00:00"
+  "threshold": 2.47,
+  "updated": "2026-11-18T13:20:26.917741+00:00"
 }
