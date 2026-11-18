@@ -1,0 +1,21 @@
+{
+  "accepted": 0,
+  "arena_score": null,
+  "candidates": 0,
+  "channel": "adinross",
+  "chat_connected": true,
+  "chat_messages": 3,
+  "clips": 0,
+  "last_ai": null,
+  "last_candidate_score": null,
+  "last_clip": null,
+  "last_error": null,
+  "platform": "kick",
+  "run_id": "44307040387",
+  "seconds": 2,
+  "segments": 0,
+  "slot": "extra-4",
+  "state": "watching",
+  "threshold": 2.2,
+  "updated": "2026-11-18T12:47:13.761657+00:00"
+}
