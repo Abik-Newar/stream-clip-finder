@@ -1,0 +1,23 @@
+{
+  "caption": "Pipeline test: 20s recorded live from kick/abhi9av.",
+  "channel": "abhi9av",
+  "clip_key": "abhi9av_20261118_112110",
+  "created_at": "2026-11-18T11:21:33.547399+00:00",
+  "done_at": null,
+  "drive_id": "1dJOxxS9Azs_Xz6_k0dprajSD_nvCVQFo",
+  "drive_path": "gdrive:StreamClips/abhi9av/2026-11-18/abhi9av_20261118_112110.mp4",
+  "duration": 20.0,
+  "file": "abhi9av_20261118_112110.mp4",
+  "hashtags": "#clips #test #streamer",
+  "platform": "kick",
+  "quote": "Test clip \u2014 captured, uploaded and linked from the live stream.",
+  "score": 1.0,
+  "starred": false,
+  "status": "not_started",
+  "stream_t": [
+    0.0,
+    20.0
+  ],
+  "title": "TEST CLIP \u2014 abhi9av",
+  "trigger": "manual pipeline test"
+}
