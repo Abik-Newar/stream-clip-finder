@@ -65,7 +65,12 @@ def _identity(platform, channel):
 
 
 def _active_runs_and_slots(my_run_id):
-    """Live capture runs → (claims from titles, {slot: set(run_ids)})."""
+    """Capturing runs → (claims from titles, {slot: set(run_ids)}).
+
+    Only `in_progress` runs count. A `queued` run has not claimed or
+    captured anything yet — and GitHub can leave a re-queued job pending
+    for a long time, so trusting it made one stuck run block a creator
+    forever (seen live: a queued kick-1 held xQc while nobody captured)."""
     if not os.environ.get("GITHUB_REPOSITORY"):
         return set(), {}
     try:
@@ -82,7 +87,7 @@ def _active_runs_and_slots(my_run_id):
     for run in data:
         if str(run.get("databaseId")) == str(my_run_id):
             continue
-        if (run.get("status") or "") not in ("in_progress", "queued"):
+        if (run.get("status") or "") != "in_progress":
             continue
         parsed = _parse_title(run.get("displayTitle") or "")
         if not parsed:
