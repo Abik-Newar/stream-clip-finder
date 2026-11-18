@@ -1,0 +1,55 @@
+name: ai-probe
+run-name: AI judge probe (boring vs shocking transcript)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install requests + Ollama
+        run: |
+          pip install -q requests
+          mkdir -p "$HOME/.scf-ollama"
+          curl -fsSL https://ollama.com/download/ollama-linux-amd64.tgz \
+            -o /tmp/ollama.tgz
+          tar -xzf /tmp/ollama.tgz -C "$HOME/.scf-ollama"
+          "$HOME/.scf-ollama/bin/ollama" serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:11434/api/version >/dev/null && break
+            sleep 1
+          done
+          "$HOME/.scf-ollama/bin/ollama" pull qwen2.5:3b-instruct
+      - name: Judge a boring and a shocking transcript
+        env:
+          AI_BASE_URL: http://localhost:11434/v1
+          AI_MODEL: qwen2.5:3b-instruct
+        run: |
+          python - <<'PY'
+          from streamclip.ai import rank_clip
+
+          boring = (
+              "[00:10] transcript: yeah so I'm just going to walk over here "
+              "and pick up this item, then we go to the next quest marker.\n"
+              "[00:24] transcript: thanks for the subs by the way, appreciate it."
+          )
+          wild = (
+              "[01:02] transcript: chat I am dead serious, if this guy says one "
+              "more word I will fly to his house and delete his account live on "
+              "stream.\n"
+              "[01:12] transcript: I have never been this angry in my entire life, "
+              "I am not joking, look at my hands shaking."
+          )
+          for name, text in (("boring", boring), ("wild", wild)):
+              verdict = rank_clip(text, "testchannel", "twitch")
+              print(f"{name} -> {verdict}")
+          PY
