@@ -1,10 +1,10 @@
 {
   "accepted": 8,
   "arena_score": 4.17,
-  "candidates": 231,
+  "candidates": 246,
   "channel": "abhi9av",
   "chat_connected": true,
-  "chat_messages": 282,
+  "chat_messages": 283,
   "clips": 2,
   "last_ai": "keep=True score=7.0",
   "last_candidate_score": 2.91,
@@ -12,10 +12,10 @@
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308153389",
-  "seconds": 2899,
-  "segments": 289,
+  "seconds": 2944,
+  "segments": 294,
   "slot": "kick-1",
   "state": "watching",
   "threshold": 2.78,
-  "updated": "2026-11-18T13:42:34.079370+00:00"
+  "updated": "2026-11-18T13:43:19.327600+00:00"
 }
