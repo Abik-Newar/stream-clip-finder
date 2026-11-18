@@ -4,7 +4,7 @@
   "candidates": 241,
   "channel": "vanshajsingh",
   "chat_connected": true,
-  "chat_messages": 736,
+  "chat_messages": 745,
   "clips": 3,
   "last_ai": "keep=True score=8.0",
   "last_candidate_score": 2.84,
@@ -12,10 +12,10 @@
   "last_error": null,
   "platform": "kick",
   "run_id": "44308166619",
-  "seconds": 2890,
-  "segments": 288,
+  "seconds": 2936,
+  "segments": 293,
   "slot": "kick-2",
   "state": "watching",
   "threshold": 2.47,
-  "updated": "2026-11-18T13:42:35.912077+00:00"
+  "updated": "2026-11-18T13:43:22.643871+00:00"
 }
