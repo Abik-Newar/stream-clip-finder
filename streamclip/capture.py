@@ -205,8 +205,8 @@ def _claim_lost(my_run_id, my_slot, platform, channel):
         if doc["slot"] == my_slot:
             mine = doc["since"]
             break
-    if mine and rival["since"] >= mine:
-        return None                       # we were first — the channel is ours
+    if mine and (rival["since"], rival["slot"]) >= (mine, my_slot):
+        return None                       # we were first (or tie-break won)
     return rival["slot"]
 
 
@@ -352,7 +352,9 @@ def choose_target(pool, ended_at, opts, my_run_id, retry_after=180,
             time.sleep(3)                  # let a racing agent commit too
             claimed, details = _claims_snapshot(my_run_id, my_slot)
             rival = details.get(key)
-            if rival and rival["since"] and rival["since"] < my_since:
+            if rival and rival["since"] and (
+                    (rival["since"], rival["slot"])
+                    < (my_since, my_slot or "slot")):
                 log.info("%s/%s: %s claimed it first — next candidate",
                          p, n, rival["slot"])
                 claimed.add(key)
