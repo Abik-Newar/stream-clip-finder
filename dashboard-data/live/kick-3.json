@@ -1,21 +1,21 @@
 {
-  "accepted": 31,
+  "accepted": 32,
   "arena_score": null,
-  "candidates": 503,
+  "candidates": 504,
   "channel": "rraenee",
   "chat_connected": true,
-  "chat_messages": 42185,
+  "chat_messages": 42452,
   "clips": 8,
   "last_ai": "keep=False score=1.0 \u2192 override",
-  "last_candidate_score": 5.98,
+  "last_candidate_score": 5.12,
   "last_clip": "rraenee_20261118_163337.mp4",
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308179817",
-  "seconds": 13160,
-  "segments": 1316,
+  "seconds": 13258,
+  "segments": 1325,
   "slot": "kick-3",
   "state": "watching",
   "threshold": 4.97,
-  "updated": "2026-11-18T16:34:40.532499+00:00"
+  "updated": "2026-11-18T16:35:33.251045+00:00"
 }
