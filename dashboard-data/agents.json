@@ -26,6 +26,10 @@
     },
     "youtube-3": {
       "enabled": true
+    },
+    "extra-4": {
+      "enabled": true,
+      "platform": "kick"
     }
   }
 }
