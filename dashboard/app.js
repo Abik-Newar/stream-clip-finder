@@ -750,7 +750,7 @@ function agentTile(slot) {
       <input data-watchurl="${esc(slot)}" type="url" spellcheck="false"
              placeholder="paste a ${v.platform} live link…"
              value="${esc(draft)}" aria-label="Link for ${esc(slot)}" />
-      <button class="btn btn-ghost btn-sm" data-slotact="watch" data-slot="${esc(slot)}"
+      <button class="btn btn-primary btn-sm" data-slotact="watch" data-slot="${esc(slot)}"
               ${watchReady ? "" : "disabled"}
               title="Make this agent monitor the pasted link">${ICONS.eye} Watch</button>
     </div>
