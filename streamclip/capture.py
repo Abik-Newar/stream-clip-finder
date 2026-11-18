@@ -725,7 +725,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 # local judge shrugs. The gate exists to block BLUFFS — a clip
                 # with no quotable line — not loud, real moments. This is what
                 # turns "one clip an hour" into a flowing board.
-                strong = score_val >= opts.threshold * opts.strong_factor
+                strong = score_val >= opts.threshold
                 if rejected and not (strong and quote):
                     stats["last_error"] = f"AI rejected ({vscore:.1f})"
                     out.unlink(missing_ok=True)
@@ -738,11 +738,19 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                     return
                 if rejected:
                     stats["last_ai"] += " → override"
-                    log.info("AI override: strong signal %.2f with a real "
-                             "quote — keeping the clip", score_val)
-                title = verdict.get("title")
-                caption = verdict.get("caption")
-                hashtags = verdict.get("hashtags")
+                    log.info("AI override: signal %.2f with a real quote — "
+                             "keeping the clip", score_val)
+                    # The judge's copy is negative by definition here: it
+                    # called its own clip "awkward". Never publish that.
+                    # Use the verbatim line + neutral context instead.
+                    title = None
+                    caption = (f"{quote} — caught live on {channel}."
+                               if quote else None)
+                    hashtags = None
+                else:
+                    title = verdict.get("title")
+                    caption = verdict.get("caption")
+                    hashtags = verdict.get("hashtags")
         # Never show a blank card: with no AI copy, use the verbatim quote.
         if not title:
             words = (quote or "").split()

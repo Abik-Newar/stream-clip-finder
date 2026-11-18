@@ -234,10 +234,13 @@ class Scorer:
                 cmd_start = cmd_end - max_clip
             elif dur < min_clip:
                 cmd_end = cmd_start + min_clip
+            clip_end = min(cmd_end, now)
+            if clip_end - cmd_start < min_clip:      # keep the length promise
+                cmd_start = max(0.0, clip_end - min_clip)
             cmd_candidates.append({
                 "peak": peak_t,
                 "span": (cmd_start, cmd_end),
-                "clip": (cmd_start, min(cmd_end, now)),
+                "clip": (cmd_start, clip_end),
                 "score": 99.0,                        # highest precision signal
                 "signals": {"chat": round(z_chat[b], 2), "audio": round(z_audio[b], 2),
                             "kw": round(z_kw[b], 2), "cmd": round(z_cmd[b], 2)},
@@ -291,6 +294,8 @@ class Scorer:
             elif dur < min_clip:
                 clip_end = clip_start + min_clip
             clip_end = min(clip_end, now)     # never cut into the future
+            if clip_end - clip_start < min_clip:   # early peak: look further back
+                clip_start = max(0.0, clip_end - min_clip)
 
             if any(abs(peak_t - p) < 60.0 for p in self.cut_peaks):
                 continue                      # already clipped this moment
