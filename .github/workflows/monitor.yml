@@ -1,9 +1,9 @@
 name: monitor
 run-name: monitor
 
-# Keeps the nine agent slots alive (per dashboard-data/agents.json) and
-# purges expired dashboard tasks. START/STOP workflows enable/disable this
-# scheduler as the master switch.
+# Manual mode: agents are ONLY started by pasting a link and pressing Watch
+# on the dashboard. This scheduler no longer dispatches capture agents — it
+# only purges old dashboard tasks (and keeps the workflow name stable).
 on:
   schedule:
     - cron: "*/10 * * * *"
@@ -14,7 +14,7 @@ permissions:
   actions: write
 
 jobs:
-  check:
+  cleanup:
     if: vars.SCF_RUNNING != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -22,10 +22,5 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - name: API budget
-        run: |
-          gh api rate_limit --jq '.resources.core | "core API: \(.remaining)/\(.limit) left"'
-      - name: Nurse agent slots
-        run: python -m streamclip.monitor
       - name: Purge dashboard tasks older than 3 days
         run: python -m streamclip.dashboard_cleanup

@@ -1,6 +1,6 @@
 /* ClipDesk service worker: app-shell cache only.
    Cross-origin traffic (GitHub API, Drive, fonts) is never intercepted. */
-const VERSION = "clipdesk-v10-creator-lock";
+const VERSION = "clipdesk-v11-manual-links";
 const SHELL = [
   "./",
   "./index.html",

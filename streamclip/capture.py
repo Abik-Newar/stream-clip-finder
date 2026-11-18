@@ -1,15 +1,13 @@
-"""Capture agent (supervisor).
+"""Capture agent (supervisor) — manual mode.
 
-The agent is pinned to a *slot*, not to a single stream: it monitors its
-assigned channel continuously until that live ends, then automatically
-switches to the next live channel from the pool and keeps going. Other agents
-are avoided via run-title claims, so two agents never capture the same
-stream.
+The agent is pinned to a *slot*. It watches exactly the channel the user
+pasted on the dashboard (a workflow input or an override file) and exits
+when that live ends; it never picks a channel by itself. Other agents are
+avoided via platform-blind creator claims, so the same person can never be
+captured twice (Twitch/Kick simulcasts included).
 
 Flow:
-    pick next live + unclaimed channel ──► capture until it ends
-              ▲                                    │
-              └────────────── switch ──────────────┘
+    dashboard link ──► claim exactly that channel ──► capture until it ends
 """
 
 import argparse
@@ -884,7 +882,78 @@ def _wait_for_target(channels, platform, pool, opts, ended_at, my_run_id,
     return None
 
 
+def _wait_for_link(platform, slot, opts, stop):
+    """Manual mode: wait for the dashboard to hand this agent a link.
+
+    Nothing is ever picked automatically. The tile shows "waiting for a
+    pasted link"; Watch writes an override and the agent starts within
+    ~10 s. Returns the channel, or "" when the wait times out."""
+    wait_s = max(60, int(opts.idle_retry_seconds))
+    deadline = time.time() + wait_s
+    log.info("agent %s waiting for a pasted %s link (%ss)", slot, platform,
+             wait_s)
+    while not stop.is_set() and time.time() < deadline:
+        ov = dashboard.take_override(slot) if slot else None
+        if ov and ov.get("platform") == platform and ov.get("channel"):
+            log.info("dashboard link → %s/%s", platform, ov["channel"])
+            return str(ov["channel"])
+        stop.wait(10)
+    return ""
+
+
+def _claim_manual(platform, channel, opts, my_run_id, slot, stop,
+                  wait_s=None):
+    """Claim one explicit channel and wait for it to be live.
+
+    Never substitutes a different channel: the pasted link is the job.
+    Returns (platform, channel, spec) or None on timeout/stop."""
+    channel = str(channel or "").strip().lstrip("@")
+    if not channel or channel == "auto":
+        return None
+    key = _identity(platform, channel)
+    deadline = time.time() + (wait_s if wait_s is not None
+                              else max(60, int(opts.idle_retry_seconds)))
+    while not stop.is_set():
+        claimed, _ = _claims_snapshot(my_run_id, slot)
+        if key not in claimed:
+            try:
+                live, spec = livecheck.probe(platform, channel)
+            except Exception as exc:
+                log.debug("probe %s/%s failed: %s", platform, channel, exc)
+                live, spec = False, None
+            if live:
+                my_since = dashboard.publish_agent_state(
+                    slot or "slot", platform, channel, my_run_id)
+                if not my_since:
+                    log.warning("%s: claim write failed — retrying", slot)
+                else:
+                    stop.wait(3)      # let a racing agent commit too
+                    _, details = _claims_snapshot(my_run_id, slot)
+                    rival = details.get(key)
+                    mine = (my_since, slot or "slot")
+                    if not (rival and rival.get("since") and
+                            (rival["since"], rival["slot"]) < mine):
+                        return (platform, channel, spec)
+                    log.info("%s/%s: %s claimed it first — waiting",
+                             platform, channel, rival["slot"])
+            else:
+                log.info("%s/%s is offline — retrying in 20 s",
+                         platform, channel)
+        else:
+            log.info("%s/%s is monitored by another agent — waiting",
+                     platform, channel)
+        if time.time() >= deadline:
+            return None
+        stop.wait(20)
+    return None
+
+
 def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
+    """Manual-only supervisor: watch the link this agent was given.
+
+    There is no pool scan and no automatic selection. A link comes from the
+    dashboard (override) or the workflow input. When that live ends the
+    agent exits — the user decides what to watch next."""
     stop = threading.Event()
 
     def on_signal(_s, _f):
@@ -893,70 +962,52 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
 
+    my_run_id = os.environ.get("GITHUB_RUN_ID", "")
+    dashboard.reset_agent_state(slot, my_run_id)
+
     # A link pasted on the dashboard wins over the workflow input.
     ov = dashboard.take_override(slot) if slot else None
     if ov and ov.get("platform") == platform and ov.get("channel"):
         channel = str(ov["channel"])
-        log.info("dashboard override at start → %s/%s", platform, channel)
+        log.info("dashboard link at start → %s/%s", platform, channel)
 
-    pool = build_pool(channels, platform, channel)
-    log.info("agent %s pool: %s", slot, ", ".join(f"{p}/{n}" for p, n in pool))
-    my_run_id = os.environ.get("GITHUB_RUN_ID", "")
-    ended_at = {}
-    dashboard.reset_agent_state(slot, my_run_id)
-
-    target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
-    if target is None:
-        target = _wait_for_target(channels, platform, pool, opts, ended_at,
-                                  my_run_id, slot, stop)
-    if target is None:
-        log.info("nothing live for %s after %ss — agent exiting (monitor "
-                 "will retry)", platform, opts.idle_retry_seconds)
-        dashboard.release_agent_state(slot, my_run_id)
-        return 0
+    if not channel or str(channel).strip().lower() == "auto":
+        channel = _wait_for_link(platform, slot, opts, stop)
+        if not channel:
+            log.info("no link given to %s — exiting until you press Watch",
+                     slot)
+            dashboard.release_agent_state(slot, my_run_id)
+            return 0
 
     while not stop.is_set():
+        target = _claim_manual(platform, channel, opts, my_run_id, slot, stop)
+        if target is None:
+            log.info("%s/%s was not available — agent exiting", platform,
+                     channel)
+            break
         p, n, spec = target
-        log.info("▸ agent %s taking %s/%s", slot, p, n)
+        log.info("▸ agent %s watching %s/%s", slot, p, n)
         rename_run(p, n, slot)
-        # choose_target commits the claim too; this second write retries if
-        # that one failed, and refreshes "since" only harmlessly.
         if not dashboard.publish_agent_state(slot, p, n, my_run_id):
-            log.warning("%s: claim write failed — capture continues", slot)
+            log.warning("%s: claim refresh failed — capture continues", slot)
+
         result, redirect = capture_channel(p, n, spec, opts, stop,
                                            my_run_id=my_run_id, my_slot=slot)
-        if result == "stopped":
-            dashboard.release_agent_state(slot, my_run_id)
-            break
-        if result == "lost_claim":
-            log.info("%s/%s: a rival agent claimed it first — failing over",
-                     p, n)
-        # release the claim so the channel is free for the next pick
         dashboard.release_agent_state(slot, my_run_id)
-        ended_at[_identity(p, n)] = time.time()
-        log.info("%s/%s ended — switching to the next live channel", p, n)
-
-        target = None
-        if result == "redirect" and redirect:
-            # the pasted channel is a one-shot priority pick, still claimed
-            # through the same race-safe path
-            target = choose_target([(p, redirect)], {}, opts, my_run_id,
-                                   my_slot=slot)
-            if target is None:
-                log.info("pasted channel %s/%s is offline — back to the pool",
-                         p, redirect)
-        if target is None:
-            target = _override_target(channels, platform, opts, ended_at,
-                                      my_run_id, slot) or \
-                choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
-        if target is None:
-            target = _wait_for_target(channels, platform, pool, opts, ended_at,
-                                      my_run_id, slot, stop)
-        if target is None:
-            log.info("nothing else live for %s — agent exiting (monitor will "
-                     "retry)", platform)
+        if result == "stopped":
             break
-        stop.wait(5)
+
+        # A dashboard redirect during capture is the only reason to switch
+        # to another channel without a new workflow run.
+        if result == "redirect" and redirect:
+            channel = redirect
+            log.info("%s/%s → new pasted link %s", slot, platform, channel)
+            stop.wait(3)
+            continue
+
+        log.info("%s/%s ended — agent exiting (manual mode)", p, n)
+        break
+
     dashboard.release_agent_state(slot, my_run_id)
     return 0
 
@@ -966,7 +1017,7 @@ def main(argv=None) -> int:
     ap.add_argument("--platform", required=True,
                     choices=["twitch", "kick", "youtube"])
     ap.add_argument("--channel", default="",
-                    help="Channel to capture first; empty = pick from the pool")
+                    help="Channel to watch (manual mode; empty = wait for a link)")
     ap.add_argument("--slot", default="manual",
                     help="Agent slot id (e.g. twitch-1); run title carries it")
     ap.add_argument("--config", default="config/channels.yml")

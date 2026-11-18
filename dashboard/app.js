@@ -2,9 +2,9 @@
    Backend = the GitHub API itself (repo contents + actions).
    Admin gate = a repo-scoped GitHub token with push access (kept per-browser).
 
-   Pages: Board (review tasks) · Agents (one tile per agent: auto mode or
-   paste a live link and Watch it right from the tile; extra agents can be
-   added). */
+   Pages: Board (review tasks) · Agents (one tile per agent: paste a live
+   link and Watch it — the agent monitors exactly that link; nothing is
+   chosen automatically; extra agents can be added). */
 "use strict";
 
 const REPO = "Abik-Newar/stream-clip-finder";
@@ -475,7 +475,7 @@ async function addExtraAgent() {
     await dispatchCapture(platform, slot);
     state.runs.push({ slot, platform, channel: "", status: "queued",
       id: 0, created: new Date().toISOString() });
-    toast(`${slot} added — auto-searching a live ${platform} channel`, "ok");
+    toast(`${slot} added — paste a link and press Watch`, "ok");
     setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
   } catch (err) {
     delete state.agentsDoc.slots[slot];
@@ -597,7 +597,6 @@ function topbarHTML() {
       <span class="spacer"></span>
       ${syncLabel()}
       <span class="syspill" id="syspill"><span class="dot"></span> …</span>
-      <button class="btn btn-primary btn-sm" id="btn-start" data-act="start">${ICONS.power} Start all</button>
       <button class="btn btn-danger btn-sm" id="btn-stop" data-act="stop">${ICONS.stop} Stop all</button>
       <button class="iconbtn" data-act="logout" title="Sign out">${ICONS.logout}</button>
     </div>
@@ -707,16 +706,19 @@ function slotVisual(slot) {
   const stopping = state.stopping.has(slot);
   let cls = "off", label = "OFF", ch = "";
   if (stopping) { cls = "starting"; label = "STOPPING"; ch = "cancelling the capture…"; }
-  else if (run && run.status === "in_progress") { cls = "live"; label = "LIVE"; }
+  else if (run && run.status === "in_progress") { cls = "live"; label = "WATCHING"; }
   else if (run && run.status === "queued") { cls = "starting"; label = "STARTING"; }
-  else if (enabled) { cls = "idle"; label = "ON · IDLE"; ch = "waiting for a live channel in the pool"; }
+  else if (enabled) { cls = "off"; label = "OFF"; ch = "paste a link + Watch to start"; }
   if (cls === "live" || (cls === "starting" && !stopping)) {
     const name = (st.channel && st.channel !== "auto") ? st.channel
       : (run && run.channel && run.channel !== "auto" ? run.channel : "");
-    ch = name ? `${st.platform || platform}/${name}` : "picking a live channel…";
+    ch = name ? `${st.platform || platform}/${name}`
+      : "waiting for a pasted link…";
   }
-  const since = st.since && cls === "live" ? ` · since ${relTime(st.since)}` : "";
-  return { platform, cls, label, ch, since, enabled, stopping };
+  const since = st.since && st.channel && cls === "live"
+    ? ` · since ${relTime(st.since)}` : "";
+  const running = !!(run && (run.status === "in_progress" || run.status === "queued"));
+  return { platform, cls, label, ch, since, enabled, stopping, running };
 }
 
 function agentTile(slot) {
@@ -734,9 +736,9 @@ function agentTile(slot) {
   const remove = isExtra
     ? `<button class="iconbtn atile-x" data-slotact="remove" data-slot="${esc(slot)}" title="Remove this extra agent" ${busy ? "disabled" : ""}>✕</button>`
     : "";
-  const main = v.enabled && !v.stopping
+  const main = v.running
     ? `<button class="btn btn-danger btn-sm" data-slotact="stop" data-slot="${esc(slot)}" ${busy ? "disabled" : ""}>${ICONS.stop} Stop</button>`
-    : `<button class="btn btn-primary btn-sm" data-slotact="start" data-slot="${esc(slot)}" ${busy ? "disabled" : ""} title="Auto-search a live channel and monitor it">${ICONS.zap} Auto</button>`;
+    : "";
   return `
   <div class="atile atile--${v.cls}" data-tile="${esc(slot)}">
     <div class="atile-top">
@@ -790,19 +792,19 @@ function renderAgents() {
         <div>
           <div class="fleet-t">System status <span class="fleet-badge">not an agent</span></div>
           <div class="fleet-s">
-            <span class="fleet-n n-live">${c.live} live</span>
+            <span class="fleet-n n-live">${c.live} watching</span>
             <span class="fleet-n n-start">${c.starting} starting</span>
-            <span class="fleet-n n-idle">${c.idle} idle</span>
+            <span class="fleet-n n-idle">${c.idle} ready</span>
             <span class="fleet-n n-off">${c.off} off</span>
           </div>
         </div>
       </div>
-      <span class="hint">each tile below is one agent · Auto finds a live channel · paste a link + Watch to lock it to that channel · no two agents ever capture the same creator (Twitch + Kick simulcasts included)</span>
+      <span class="hint">each tile below is one agent · paste a live link + Watch — it monitors exactly that link, never anything automatic · no two agents ever capture the same creator (Twitch + Kick simulcasts included)</span>
       <button class="btn btn-ghost btn-sm" data-act="addagent">${ICONS.plus} Add agent</button>
     </div>
     <div class="agentgrid">${groups}${extraGroup}</div>
     <div class="footer">
-      <span>Agent switches live in-repo (dashboard-data/agents.json) — the monitor keeps enabled agents alive.</span>
+      <span>Manual mode — agents only watch the links you paste. Nothing is auto-dispatched.</span>
     </div>
   </div>`;
 }
@@ -1076,9 +1078,10 @@ document.addEventListener("click", async (event) => {
     }
 
     if (action === "watch") {
-      // Lock this exact agent to the pasted channel. If it is already
-      // running, an override file redirects it in place (~20 s); only a
-      // stopped slot needs a new workflow run.
+      // Manual mode: this exact agent watches this exact link. Watch always
+      // gives the slot its own run for the pasted channel, so it can never
+      // fall back to auto-picking something else. The workflow concurrency
+      // group (cancel-in-progress) replaces an older run for the slot.
       const platform = slotPlatform(slot);
       const parsed = parseStreamUrl(state.drafts[slot] || "", platform);
       if (!parsed || parsed.platform !== platform) {
@@ -1087,7 +1090,15 @@ document.addEventListener("click", async (event) => {
           : "Paste a twitch / kick / youtube link first", "err");
         return;
       }
-      const liveRun = state.runs.find((r) => r.slot === slot);
+      const liveRun = state.runs.find(
+        (r) => r.slot === slot && r.status === "in_progress");
+      const cur = state.agentState[slot] || {};
+      const curCh = String(cur.channel
+        || (liveRun && liveRun.channel) || "").toLowerCase();
+      if (liveRun && curCh === parsed.name.toLowerCase()) {
+        toast(`${slot} is already watching ${platform}/${parsed.name}`, "ok");
+        return;
+      }
       state.busy.add(`slot:${slot}`);
       if (state.agentsDoc) {
         state.agentsDoc.slots = { ...(state.agentsDoc.slots || {}),
@@ -1096,21 +1107,16 @@ document.addEventListener("click", async (event) => {
       state.stopping.delete(slot);
       state.runs = state.runs.filter((r) => r.slot !== slot);
       state.runs.push({ slot, platform, channel: parsed.name,
-        status: liveRun ? liveRun.status : "queued", id: liveRun ? liveRun.id : 0,
-        created: new Date().toISOString() });
+        status: "queued", id: 0, created: new Date().toISOString() });
       render();
       try {
         await Promise.all([
           saveSlot(slot, true),
           writeOverride(slot, platform, parsed.name),
         ]);
-        if (!liveRun) {
-          await dispatchCapture(platform, slot, parsed.name);
-          toast(`${slot} started — watching ${platform}/${parsed.name}`, "ok");
-        } else {
-          toast(`${slot} switching to ${platform}/${parsed.name} (~20 s)`, "ok");
-        }
-        setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
+        await dispatchCapture(platform, slot, parsed.name);
+        toast(`${slot} watching ${platform}/${parsed.name}`, "ok");
+        setTimeout(() => loadAgents().then(render).catch(() => {}), 4000);
       } catch (err) {
         toast(`Failed: ${err.message}`, "err");
         setTimeout(() => loadAgents().then(render).catch(() => {}), 500);

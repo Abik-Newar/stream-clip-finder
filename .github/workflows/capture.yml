@@ -1,11 +1,11 @@
 name: capture
 run-name: clip-capture|${{ inputs.platform }}|${{ inputs.channel != '' && inputs.channel || 'auto' }}|${{ inputs.slot }}
 
-# One capture agent slot (e.g. twitch-1 … youtube-3, or "manual"). The agent
-# monitors a channel until that live ends, then switches to the next live
-# channel of ITS platform and keeps going. When nothing of its platform is
-# live it exits quickly and the monitor re-launches enabled slots.
-# The run title is the agent's claim — other agents never double-capture.
+# One capture agent slot (e.g. twitch-1 … youtube-3, or "manual"). MANUAL
+# MODE: the agent watches exactly the channel it is given by the dashboard's
+# Watch button, and exits when that live ends. It never picks a channel by
+# itself. The run title is the agent's claim — other agents never
+# double-capture the same creator (Twitch/Kick simulcasts included).
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ on:
         required: false
         default: "manual"
       channel:
-        description: "Channel to capture first (empty = pick from the pool)"
+        description: "Channel to watch (set by the dashboard Watch button)"
         required: false
         default: ""
       threshold:

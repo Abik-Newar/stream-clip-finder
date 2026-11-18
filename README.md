@@ -1,18 +1,20 @@
 # StreamClipFinder 🎬
 
 Real-time "best moment" clipper for live streams. Up to **6 parallel capture
-agents** watch Twitch / Kick / YouTube channels while they are live, detect
-hype moments from **chat spikes + audio loudness + Whisper transcript
-keywords + "clip it" commands**, cut a **25–90 second** clip anchored around
-the moment, and upload it straight to your **Google Drive** — a few minutes
-after it happened.
+agents** watch the Twitch / Kick / YouTube channels **you paste on the
+dashboard**, detect hype moments from **chat spikes + audio loudness + Whisper
+transcript keywords + "clip it" commands**, cut a **25–90 second** clip
+anchored around the moment, and upload it straight to your **Google Drive** —
+a few minutes after it happened.
 
 ```
-                    ┌─ agent 1: twitch/x ─┐
-live streams ───────┼─ agent 2: kick/y ───┤
-(monitor polls      ├─ … up to 6 agents ──┤──► hype scorer ──► trigger
- every 10 min)      └─ agent 6: … ────────┘         │
-                                                     ▼
+ paste a link + Watch
+        │
+        ▼
+  ┌─ agent 1: twitch/x ─┐
+  ├─ agent 2: kick/y ───┤──► hype scorer ──► trigger
+  ├─ … up to 6 agents ──┤                       │
+  └─ agent 6: … ────────┘                       ▼
    signals: chat velocity × unique-chatter, dB rise over median,
    transcript hype/laughter/clip-commands  ──►  adaptive 25–90 s span
                                                      │
@@ -21,9 +23,9 @@ live streams ───────┼─ agent 2: kick/y ───┤
                               ffmpeg cut ──► rclone ──► Google Drive
 ```
 
-Each live channel = one GitHub Actions job (own 4-core VM), so agents run in
-parallel without fighting over CPU. The monitor dispatches captures only while
-the pool (`max_concurrent`, default 6) has capacity.
+**Manual mode:** nothing is picked automatically. Each Watch click dispatches
+one GitHub Actions job for that exact slot + channel (own 4-core VM). When the
+live ends the agent stops.
 
 ---
 
@@ -121,28 +123,29 @@ game-specific models — per-title training is out of scope), face-cam tracking
 (framing concern, not detection), YAMNet laughter classifiers (too heavy for a
 free Actions runner — Whisper "haha" + audio rises cover most of it).
 
-## The agent model (continuous monitoring + failover)
+## The agent model (manual watching)
 
-Agents are **not** tied to one stream — they are tied to a *slot*:
+Agents are tied to a *slot*, and each slot watches exactly one link:
 
 ```
-monitor (every 10 min)
-   └─ sees which channels are live → dispatches one agent per live channel
+dashboard: paste link + Watch
+   └─ dispatch capture.yml(slot, platform, channel)
         │
-        └─ AGENT (up to 6 in parallel)
-             ├─ captures twitch/abc for the WHOLE live
-             ├─ live ends → re-probes the pool
-             ├─ picks the next live channel (skips ones other agents hold)
-             └─ keeps going until you press ■ STOP
+        └─ AGENT
+             ├─ claims that exact creator (platform-blind)
+             ├─ captures it for the WHOLE live
+             ├─ live ends → exits (no automatic next channel)
+             └─ or press ■ Stop to cancel now
 ```
 
-- **Claims:** each agent publishes the channel it is on in its workflow-run
-  title (`clip-capture|twitch|jynxzi`), so two agents never record the same
-  stream.
-- **Failover:** when a live ends the agent switches within seconds — no
-  manual restart, no dead air.
-- **Pool:** `config/channels.yml` is an ordered list; the first live,
-  unclaimed channel wins. Set `enabled: false` to pause a channel.
+- **Claims:** each agent publishes its channel in
+  `dashboard-data/agent-state/<slot>.json`; identical creator handles are one
+  claim, so `twitch/xqc` and `kick/xqc` can never be captured at the same
+  time. Same-millisecond ties are broken deterministically.
+- **No auto-selection:** an agent with no link waits for one (or exits); it
+  never scans a pool or substitutes another channel.
+- **No auto-dispatch:** the scheduled workflow only purges old dashboard
+  tasks. Capture jobs exist only because you pressed Watch.
 - **Fresh baseline per channel:** switching channels resets the scorer, so
   each stream is judged against its own normal chat pace.
 
