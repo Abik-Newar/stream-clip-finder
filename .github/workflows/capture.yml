@@ -44,15 +44,33 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Cache CLI binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.scf-bin
+          key: cli-${{ runner.os }}-ffmpeg7-rclone
       - name: Install capture deps
         run: |
-          # apt and pip run in parallel — capture must start fast
-          (sudo apt-get update -qq &&
-           sudo apt-get install -y -qq ffmpeg rclone) &
-          APT_PID=$!
+          # Static ffmpeg + rclone (cached) — no apt, capture starts in ~30 s
+          mkdir -p ~/.scf-bin
+          if [ ! -x ~/.scf-bin/ffmpeg ]; then
+            curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+              -o /tmp/ffmpeg.tar.xz
+            mkdir -p /tmp/ffmpeg-static
+            tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-static --strip-components=1
+            cp /tmp/ffmpeg-static/ffmpeg /tmp/ffmpeg-static/ffprobe ~/.scf-bin/
+          fi
+          if [ ! -x ~/.scf-bin/rclone ]; then
+            curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+              -o /tmp/rclone.zip
+            mkdir -p /tmp/rclone-static
+            unzip -q -o /tmp/rclone.zip -d /tmp/rclone-static
+            cp /tmp/rclone-static/rclone-*/rclone ~/.scf-bin/
+          fi
+          chmod +x ~/.scf-bin/*
+          echo "$HOME/.scf-bin" >> "$GITHUB_PATH"
           pip install -q -r requirements-capture.txt
-          wait "$APT_PID"
-          ffmpeg -version | head -1
+          ~/.scf-bin/ffmpeg -version | head -1
           streamlink --version | head -1
       - name: Cache Whisper model
         uses: actions/cache@v4
@@ -68,13 +86,6 @@ jobs:
           else
             echo "WARNING: GDRIVE_RCLONE_CONF not set — clips will be kept locally only"
           fi
-      - name: Cache Ollama binary + model
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.ollama
-            ~/.scf-ollama
-          key: ollama-${{ runner.os }}-${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
       - name: Start AI judge in background
         run: |
           cat > /tmp/ai_setup.sh <<'SH'
