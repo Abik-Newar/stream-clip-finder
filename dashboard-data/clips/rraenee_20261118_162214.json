@@ -1,0 +1,23 @@
+{
+  "caption": "Aaa buras\u0131 \u2014 caught live on rraenee. \u2014 GTA6",
+  "channel": "rraenee",
+  "clip_key": "rraenee_20261118_162214",
+  "created_at": "2026-11-18T16:22:52.733841+00:00",
+  "done_at": null,
+  "drive_id": "1DQysPPTtatUOCseoE9mdzK35Bdvh43M9",
+  "drive_path": "gdrive:StreamClips/rraenee/2026-11-18/rraenee_20261118_162214.mp4",
+  "duration": 18.5,
+  "file": "rraenee_20261118_162214.mp4",
+  "hashtags": "#GTA6",
+  "platform": "kick",
+  "quote": "Aaa buras\u0131",
+  "score": 5.26,
+  "starred": false,
+  "status": "not_started",
+  "stream_t": [
+    11619.9,
+    11637.9
+  ],
+  "title": "Aaa buras\u0131 | GTA6",
+  "trigger": "audio z3.3, keywords z25.0"
+}
