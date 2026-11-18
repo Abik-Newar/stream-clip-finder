@@ -1,21 +1,18 @@
 {
   "accepted": 18,
-  "arena_score": null,
   "candidates": 1829,
   "channel": "adinross",
   "chat_connected": true,
-  "chat_messages": 22711,
+  "chat_messages": 22832,
   "clips": 3,
   "last_ai": "keep=False score=1.0",
-  "last_candidate_score": 4.26,
   "last_clip": "adinross_20261118_140618.mp4",
   "last_error": "AI rejected (1.0)",
   "platform": "kick",
   "run_id": "44308191886",
-  "seconds": 7706,
-  "segments": 770,
+  "seconds": 7772,
+  "segments": 776,
   "slot": "extra-4",
-  "state": "watching",
-  "threshold": 4.43,
-  "updated": "2026-11-18T15:03:30.175622+00:00"
+  "state": "ended",
+  "updated": "2026-11-18T15:03:50.641844+00:00"
 }
