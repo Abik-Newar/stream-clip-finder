@@ -32,7 +32,8 @@ def _endpoint():
 
 
 def rank_clip(transcript_text, channel="", platform=""):
-    """Return {"keep": bool, "title": str} — or None if unavailable/failed."""
+    """Return {"keep": bool, "title": str, "caption": str, "hashtags": [...]}
+    — or None if unavailable/failed."""
     base, model, key = _endpoint()
     if not base or not transcript_text.strip():
         return None
@@ -42,12 +43,20 @@ def rank_clip(transcript_text, channel="", platform=""):
         return None
 
     prompt = (
-        "You are a clip judge for a live-stream highlight tool. Decide if "
-        "this transcript excerpt contains a genuinely funny, epic or hype "
-        "moment worth posting as a short clip (max 90 s). Be strict about "
-        "filler and silence, but real reactions always count.\n"
+        "You are a viral clip judge for a live-stream highlight tool. "
+        "Decide if this transcript excerpt contains a genuinely funny, epic, "
+        "surprising or hype moment that works as a SHORT STANDALONE clip. "
+        "Judge like TikTok/Reels editors: strong hook in the first seconds, "
+        "a self-contained payoff, real emotion. Be strict: filler, silence "
+        "and inside jokes that need context are NOT clips.\n"
+        "If it is a clip, also write the social copy:\n"
+        "- title: 3-6 word clickable title\n"
+        "- caption: 1-2 catchy sentences with a hook, no spoilers\n"
+        "- hashtags: 4-6 lowercase tags (mix of platform + game/genre + "
+        "viral tags like #clips #streamer #gaming)\n"
         "Answer ONLY with JSON, no extra text:\n"
-        '{"keep": true|false, "title": "3-6 word clickable title"}\n\n'
+        '{"keep": true|false, "title": "...", "caption": "...", '
+        '"hashtags": ["#tag1", "#tag2"]}\n\n'
         f"Channel: {channel or 'unknown'} ({platform or 'unknown'} platform)\n"
         f"Transcript:\n{transcript_text[-3000:]}"
     )
@@ -58,13 +67,20 @@ def rank_clip(transcript_text, channel="", platform=""):
                      "Content-Type": "application/json"},
             json={"model": model,
                   "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.2,
-                  "max_tokens": 200},
+                  "temperature": 0.3,
+                  "max_tokens": 320},
             timeout=120)
         r.raise_for_status()
         content = r.json()["choices"][0]["message"]["content"]
         content = content[content.find("{"): content.rfind("}") + 1]
-        return json.loads(content)
+        verdict = json.loads(content)
+        tags = verdict.get("hashtags")
+        if isinstance(tags, str):
+            tags = tags.split()
+        if isinstance(tags, list):
+            tags = ["#" + t.strip().lstrip("#") for t in tags if str(t).strip()]
+            verdict["hashtags"] = " ".join(tags)
+        return verdict
     except Exception as exc:
         log.info("AI ranking unavailable (%s) — publishing untitled", exc)
         return None

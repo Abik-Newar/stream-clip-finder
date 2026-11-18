@@ -21,6 +21,10 @@ def _gh(*args):
 
 
 def load_slots(repo) -> dict:
+    """slot → {"enabled": bool, "platform": str} from agents.json.
+
+    Extra agents added from the dashboard carry their own platform; the
+    nine built-in slots fall back to the SLOT_PLATFORM map."""
     r = _gh("api", f"repos/{repo}/contents/{AGENTS_PATH}",
             "-H", "Accept: application/vnd.github.raw")
     if r.returncode != 0:
@@ -31,8 +35,13 @@ def load_slots(repo) -> dict:
     except json.JSONDecodeError:
         print("agents.json invalid — nothing to do")
         return {}
-    return {name: bool((cfg or {}).get("enabled", False))
-            for name, cfg in (data.get("slots") or {}).items()}
+    return {
+        name: {
+            "enabled": bool((cfg or {}).get("enabled", False)),
+            "platform": (cfg or {}).get("platform") or "",
+        }
+        for name, cfg in (data.get("slots") or {}).items()
+    }
 
 
 def active_runs() -> dict:
@@ -73,14 +82,15 @@ def main():
     if not slots:
         return
     running = active_runs()
-    enabled = [s for s, on in slots.items() if on]
+    enabled = [s for s, cfg in slots.items() if cfg["enabled"]]
     print(f"slots: {len(enabled)} enabled, {len(running)} agents running")
     for slot in sorted(slots):
-        platform = SLOT_PLATFORM.get(slot)
+        cfg = slots[slot]
+        platform = cfg["platform"] or SLOT_PLATFORM.get(slot)
         if not platform:
             print(f"{slot}: unknown slot id — skipped")
             continue
-        if not slots[slot]:
+        if not cfg["enabled"]:
             print(f"{slot}: stopped (disabled in dashboard)")
             continue
         if slot in running:

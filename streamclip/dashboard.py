@@ -142,6 +142,8 @@ def publish_clip(entry: dict, drive_dest: str) -> None:
             "score": entry.get("score", 0),
             "trigger": entry.get("trigger", ""),
             "title": entry.get("title"),
+            "caption": entry.get("caption"),
+            "hashtags": entry.get("hashtags"),
             "stream_t": entry.get("stream_t"),
             "duration": entry.get("duration", 0),
             "created_at": entry.get("created"),

@@ -8,17 +8,18 @@ import yaml
 
 @dataclass
 class Options:
-    # Clip geometry
-    clip_length: int = 45          # default lookback before the peak (floor)
-    tail: int = 15                 # seconds recorded after the peak
-    max_clip_seconds: int = 90     # hard cap — "any duration under 90 seconds"
-    min_clip_seconds: int = 25     # clips shorter than this are not worth it
+    # Clip geometry — hook-first (viral research: hook in the first 2-3 s,
+    # tight 15-60 s cuts; a 45 s setup buries the moment)
+    clip_length: int = 25          # default lookback before the peak (floor)
+    tail: int = 10                 # seconds recorded after the peak
+    max_clip_seconds: int = 60     # platform sweet spot (hard cap stays < 90 s)
+    min_clip_seconds: int = 18     # clips shorter than this are not worth it
     pad_before: float = 3.0        # extra seconds before the detected spike
     segment_time: int = 10         # ffmpeg segment length (s)
 
     # Detection
     threshold: float = 3.0         # fused hype z-score that a peak must reach
-    cooldown: int = 120            # min seconds between clips
+    cooldown: int = 180            # min seconds between clips (diversity gap)
     window: int = 60               # scoring window (s)
     baseline: int = 900            # rolling baseline window (s)
     min_uptime: int = 120          # ignore the first N seconds of a capture
@@ -32,13 +33,13 @@ class Options:
     pre_pad: float = 3.0           # context seconds before the spike
     reaction_tail: float = 8.0     # post-play reaction seconds after the peak
 
-    # Quality gates (v4) — keep trash clips out of storage
-    strong_factor: float = 1.35    # score ≥ this × threshold cuts immediately
-    grace_period: int = 75         # unbeaten "lull-best" waits this long, then cuts
+    # Quality gates (v4) — only the BEST of a stream reaches the board
+    strong_factor: float = 1.5     # score ≥ this × threshold cuts immediately
+    grace_period: int = 90         # unbeaten "lull-best" waits this long, then cuts
     max_per_hour: int = 3          # rolling-hour clip quota per channel
-    threshold_floor: float = 1.8   # auto-calibration lower bound
+    threshold_floor: float = 2.0   # auto-calibration lower bound (quality floor)
     threshold_ceiling: float = 6.0 # auto-calibration upper bound
-    overlap_iou: float = 0.4       # max overlap allowed with a recent cut
+    overlap_iou: float = 0.3       # max overlap allowed with a recent cut
     quiet_decay: float = 0.97      # threshold decay step during quiet stretches
 
     # Storage

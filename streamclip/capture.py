@@ -170,6 +170,33 @@ def _claims_snapshot(my_run_id, my_slot):
     return claimed, details
 
 
+def _claim_lost(my_run_id, my_slot, platform, channel):
+    """The rival slot that verifiably claimed this channel first, or None.
+
+    Used twice, as two independent safety layers so that two agents can
+    NEVER capture the same channel:
+      • watchdog  — called every ~60 s mid-capture; aborts our capture
+        early when a rival holds the channel with an earlier claim
+        (the exact race that produced duplicate clips before).
+      • shadow-drop — called before a clip is uploaded; drops the clip
+        instead of publishing a duplicate of the rival's work.
+    Only claims by OTHER slots with an EARLIER `since` count — if we
+    claimed the channel first, it is ours."""
+    key = (platform, str(channel).strip().lstrip("@").lower())
+    _, details = _claims_snapshot(my_run_id, my_slot)
+    rival = details.get(key)
+    if not rival or not rival.get("since"):
+        return None
+    mine = None
+    for doc in _read_agent_state():
+        if doc["slot"] == my_slot:
+            mine = doc["since"]
+            break
+    if mine and rival["since"] >= mine:
+        return None                       # we were first — the channel is ours
+    return rival["slot"]
+
+
 def rename_run(platform, channel, slot):
     """Tell other agents we moved: the run title is our claim."""
     if not os.environ.get("GITHUB_REPOSITORY"):
@@ -319,7 +346,7 @@ def choose_target(pool, ended_at, opts, my_run_id, retry_after=180,
 
 # ------------------------------------------------------------- quality gates
 
-ARENA_MARGIN = 1.10          # a new candidate must beat the held one by 10%
+ARENA_MARGIN = 1.20          # a new candidate must clearly beat the held one
 
 
 class SelectionGate:
@@ -483,8 +510,12 @@ def _recent_same_channel(name_prefix, gap_s=480):
 
 # ------------------------------------------------------------------ capturing
 
-def capture_channel(platform, channel, reader_spec, opts, stop):
-    """Capture one channel until its live ends. Returns 'ended' or 'stopped'."""
+def capture_channel(platform, channel, reader_spec, opts, stop,
+                    my_run_id="", my_slot=""):
+    """Capture one channel until its live ends.
+
+    Returns 'ended', 'stopped', or 'lost_claim' (a rival agent verifiably
+    claimed this channel first — the caller fails over to another one)."""
     kind, url = reader_spec
     t0 = time.time()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -520,6 +551,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
     gate = SelectionGate(opts, t0, on_handle=scorer.note_cut)
     last_idx = 0
     result = "ended"
+    last_claim_check = time.time()
 
     def cut(t_start, t_end, score_val, reason):
         rel_start, rel_end = t_start - t0, t_end - t0
@@ -544,7 +576,13 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
             log.info("duplicate dropped: %s already cut a moment seconds ago",
                      channel)
             return
-        title = None
+        rival = _claim_lost(my_run_id, my_slot, platform, channel)
+        if rival:
+            out.unlink(missing_ok=True)
+            log.info("duplicate dropped: agent %s owns %s (earlier claim)",
+                     rival, channel)
+            return
+        title = caption = hashtags = None
         if opts.ai_ranking:
             verdict = rank_clip("\n".join(ring), channel, platform)
             if verdict:
@@ -554,6 +592,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
                     log.info("AI dropped the clip")
                     return
                 title = verdict.get("title")
+                caption = verdict.get("caption")
+                hashtags = verdict.get("hashtags")
         if title and opts.title_template:
             try:
                 title = opts.title_template.format(
@@ -561,7 +601,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
             except (KeyError, IndexError, ValueError):
                 title = f"{title}"   # malformed template → keep the raw title
         entry = {"platform": platform, "channel": channel, "file": name,
-                 "title": title, "score": round(score_val, 2),
+                 "title": title, "caption": caption, "hashtags": hashtags,
+                 "score": round(score_val, 2),
                  "trigger": reason,
                  "stream_t": [round(rel_start, 1), round(rel_end, 1)],
                  "duration": round(actual_dur, 1),
@@ -583,6 +624,18 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
     while not stop.is_set():
         stop.wait(5)
         now = time.time()
+
+        # 0) claim watchdog — never two agents on one channel: if a rival
+        #    verifiably claimed this channel BEFORE us, abort now and let
+        #    the supervisor fail over to a different channel.
+        if now - last_claim_check >= 60:
+            last_claim_check = now
+            rival = _claim_lost(my_run_id, my_slot, platform, channel)
+            if rival:
+                log.info("%s/%s: agent %s claimed it first — aborting "
+                         "duplicate capture", platform, channel, rival)
+                result = "lost_claim"
+                break
 
         # 1) collect fully written segments (complete once the next exists)
         while True:
@@ -650,7 +703,11 @@ def capture_channel(platform, channel, reader_spec, opts, stop):
             log.info("%s/%s live ended (ffmpeg closed)", platform, channel)
             break
 
-    if gate.arena:
+    if result == "lost_claim":
+        log.info("dropping %s buffered clip(s) — the rival agent owns this "
+                 "channel now", len(pending))
+        pending.clear()
+    elif gate.arena:
         a = gate.arena
         pending.append((a["clip"][0], a["clip"][1], a["score"], a["reason"]))
         log.info("flushing best-of-lull candidate at stream end (%.2f)",
@@ -707,9 +764,15 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
         log.info("▸ agent %s taking %s/%s", slot, p, n)
         rename_run(p, n, slot)
         dashboard.publish_agent_state(slot, p, n, my_run_id)
-        result = capture_channel(p, n, spec, opts, stop)
+        result = capture_channel(p, n, spec, opts, stop,
+                                 my_run_id=my_run_id, my_slot=slot)
         if result == "stopped":
             break
+        if result == "lost_claim":
+            log.info("%s/%s: a rival agent claimed it first — failing over",
+                     p, n)
+        # release the claim so the channel is free for the next pick
+        dashboard.publish_agent_state(slot, p, "", my_run_id)
         ended_at[(p, n.lstrip("@").lower())] = time.time()
         log.info("%s/%s ended — switching to the next live channel", p, n)
         target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)

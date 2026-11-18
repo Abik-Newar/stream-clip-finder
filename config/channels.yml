@@ -42,17 +42,18 @@ channels:
   #   name: "@handle"      # YouTube needs the YT_COOKIES secret (bot-check)
 
 options:
-  # Clip geometry — clips are always strictly under 90 seconds
-  clip_length: 45        # default lookback before the peak (floor)
-  tail: 15               # seconds recorded after the peak
-  max_clip_seconds: 90   # hard cap (system clamps to 90)
-  min_clip_seconds: 25   # shorter clips are skipped
+  # Clip geometry — hook-first cuts (viral research: hook in the first 2-3 s,
+  # tight 15-60 s clips). Clips are always strictly under 90 seconds.
+  clip_length: 25        # default lookback before the peak (floor)
+  tail: 10               # seconds recorded after the peak
+  max_clip_seconds: 60   # platform sweet spot (system clamps to 90)
+  min_clip_seconds: 18   # shorter clips are skipped
   pad_before: 3          # extra seconds before the detected spike
   segment_time: 10       # internal recording chunk size
 
   # Detection — see README "How clip detection works"
   threshold: 3.0         # fused hype z-score a peak must reach
-  cooldown: 120          # minimum seconds between clips
+  cooldown: 180          # minimum seconds between clips (diversity gap)
   window: 60             # scoring window (seconds)
   baseline: 900          # rolling baseline window (seconds)
   min_uptime: 120        # ignore the first N seconds of a capture
@@ -66,13 +67,13 @@ options:
   pre_pad: 3             # context seconds before the spike
   reaction_tail: 8       # post-play reaction seconds after the peak
 
-  # Quality gates (v4) — best-clips-only storage policy
-  strong_factor: 1.35    # score ≥ 1.35×threshold cuts instantly, no waiting
-  grace_period: 75       # a "lull-best" candidate must stay unbeaten this long
+  # Quality gates (v4) — only the BEST of a stream reaches the board
+  strong_factor: 1.5     # score ≥ 1.5×threshold cuts instantly, no waiting
+  grace_period: 90       # a "lull-best" candidate must stay unbeaten this long
   max_per_hour: 3        # rolling-hour clip quota per channel
-  threshold_floor: 1.8   # auto-calibration bounds (quiet decay / quota raise)
+  threshold_floor: 2.0   # auto-calibration bounds (quiet decay / quota raise)
   threshold_ceiling: 6.0
-  overlap_iou: 0.4       # reject cuts overlapping a recent clip
+  overlap_iou: 0.3       # reject cuts overlapping a recent clip
   quiet_decay: 0.97      # threshold decay step during quiet stretches
 
   # Storage

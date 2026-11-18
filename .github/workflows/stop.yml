@@ -47,7 +47,7 @@ jobs:
               doc = json.load(open(path))
           except Exception:
               doc = {}
-          doc["slots"] = {k: {"enabled": False} for k in doc.get("slots", {})}
+          doc["slots"] = {k: {**(v if isinstance(v, dict) else {}), "enabled": False} for k, v in doc.get("slots", {}).items()}
           payload = {"message": "agents: master stop — all slots disabled",
                      "content": base64.b64encode(
                          (json.dumps(doc, indent=2) + "\n").encode()).decode()}
