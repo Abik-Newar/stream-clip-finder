@@ -170,6 +170,45 @@ def release_agent_state(slot: str, run_id: str = "") -> None:
         log.info("dashboard: claim release failed: %s", exc)
 
 
+def reset_agent_state(slot: str, run_id: str = "") -> None:
+    """Clear a claim left behind by a PREVIOUS run of this same slot.
+
+    GitHub can force-kill a cancelled job before its shutdown handler runs,
+    so the old channel would keep showing (and keep blocking other agents
+    for the 5-minute freshness window). A new run of the slot owns that
+    file and clears it before picking anything."""
+    try:
+        token = _token()
+        if not token or not slot:
+            return
+        url = f"{API}/repos/{_repo()}/contents/{AGENT_STATE_DIR}/{slot}.json"
+        status, meta = _request("GET", url, token)
+        if status != 200 or not isinstance(meta, dict):
+            return
+        doc = json.loads(base64.b64decode(meta.get("content", "")).decode())
+        old_run = str(doc.get("run_id") or "")
+        if not old_run or old_run == str(run_id):
+            return                          # no stale claim to clear
+        from datetime import datetime, timezone
+        new = {
+            "slot": slot,
+            "platform": doc.get("platform"),
+            "channel": "",
+            "run_id": str(run_id),
+            "since": datetime.now(timezone.utc).isoformat(),
+        }
+        _request("PUT", url, token, payload={
+            "message": f"agent: {slot} cleared a stale claim",
+            "content": base64.b64encode(
+                (json.dumps(new, indent=2, sort_keys=True) + "\n").encode()
+            ).decode(),
+            "sha": meta.get("sha"),
+        })
+        log.info("dashboard: cleared stale claim for %s (run %s)", slot, old_run)
+    except Exception as exc:
+        log.info("dashboard: stale claim reset failed: %s", exc)
+
+
 def drive_file_id(drive_path: str) -> str | None:
     """Create a public share link for the clip and return its Drive file id."""
     try:

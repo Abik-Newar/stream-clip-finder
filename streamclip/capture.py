@@ -849,6 +849,7 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     log.info("agent %s pool: %s", slot, ", ".join(f"{p}/{n}" for p, n in pool))
     my_run_id = os.environ.get("GITHUB_RUN_ID", "")
     ended_at = {}
+    dashboard.reset_agent_state(slot, my_run_id)
 
     target = choose_target(pool, ended_at, opts, my_run_id, my_slot=slot)
     if target is None:
@@ -857,6 +858,7 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
     if target is None:
         log.info("nothing live for %s after %ss — agent exiting (monitor "
                  "will retry)", platform, opts.idle_retry_seconds)
+        dashboard.release_agent_state(slot, my_run_id)
         return 0
 
     while not stop.is_set():
