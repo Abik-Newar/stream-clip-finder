@@ -18,6 +18,8 @@ jobs:
     if: vars.SCF_RUNNING != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: API budget
@@ -25,9 +27,5 @@ jobs:
           gh api rate_limit --jq '.resources.core | "core API: \(.remaining)/\(.limit) left"'
       - name: Nurse agent slots
         run: python -m streamclip.monitor
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Purge dashboard tasks older than 3 days
         run: python -m streamclip.dashboard_cleanup
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
