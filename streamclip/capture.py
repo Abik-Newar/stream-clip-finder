@@ -55,7 +55,7 @@ AGENT_STATE_DIR = "dashboard-data/agent-state"
 
 
 def _active_runs_and_slots(my_run_id):
-    """Live capture runs → (claims from titles, {slot: run_id})."""
+    """Live capture runs → (claims from titles, {slot: set(run_ids)})."""
     if not os.environ.get("GITHUB_REPOSITORY"):
         return set(), {}
     try:
@@ -80,7 +80,7 @@ def _active_runs_and_slots(my_run_id):
         platform, channel, slot = parsed
         if channel and channel != "auto":
             claimed.add((platform, channel.lstrip("@").lower()))
-        active_slots[slot] = str(run.get("databaseId"))
+        active_slots.setdefault(slot, set()).add(str(run.get("databaseId")))
     return claimed, active_slots
 
 
@@ -142,7 +142,7 @@ def _verified_claims(active_slots, my_slot):
         if active_slots:
             if slot not in active_slots:
                 continue
-            if doc["run_id"] and doc["run_id"] != active_slots.get(slot, ""):
+            if doc["run_id"] and doc["run_id"] not in active_slots.get(slot, set()):
                 continue
         elif doc["since"]:
             try:
@@ -854,12 +854,13 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
         result, redirect = capture_channel(p, n, spec, opts, stop,
                                            my_run_id=my_run_id, my_slot=slot)
         if result == "stopped":
+            dashboard.release_agent_state(slot, my_run_id)
             break
         if result == "lost_claim":
             log.info("%s/%s: a rival agent claimed it first — failing over",
                      p, n)
         # release the claim so the channel is free for the next pick
-        dashboard.publish_agent_state(slot, p, "", my_run_id)
+        dashboard.release_agent_state(slot, my_run_id)
         ended_at[(p, n.lstrip("@").lower())] = time.time()
         log.info("%s/%s ended — switching to the next live channel", p, n)
 
@@ -884,6 +885,7 @@ def run(platform, channel, opts: Options, channels=None, slot="manual") -> int:
                      "retry)", platform)
             break
         stop.wait(5)
+    dashboard.release_agent_state(slot, my_run_id)
     return 0
 
 

@@ -135,6 +135,41 @@ def publish_agent_state(slot: str, platform: str, channel: str,
         return ""
 
 
+def release_agent_state(slot: str, run_id: str = "") -> None:
+    """Clear a claim on shutdown — but only if THIS run still owns the file.
+
+    Guards against a cancelled agent wiping the fresh claim of its
+    replacement (the concurrency group can overlap for a few seconds)."""
+    try:
+        token = _token()
+        if not token or not slot:
+            return
+        url = f"{API}/repos/{_repo()}/contents/{AGENT_STATE_DIR}/{slot}.json"
+        status, meta = _request("GET", url, token)
+        if status != 200 or not isinstance(meta, dict):
+            return
+        doc = json.loads(base64.b64decode(meta.get("content", "")).decode())
+        if run_id and str(doc.get("run_id") or "") != str(run_id):
+            return                          # a newer run owns the slot now
+        from datetime import datetime, timezone
+        new = {
+            "slot": slot,
+            "platform": doc.get("platform"),
+            "channel": "",
+            "run_id": str(run_id),
+            "since": datetime.now(timezone.utc).isoformat(),
+        }
+        _request("PUT", url, token, payload={
+            "message": f"agent: {slot} released its channel",
+            "content": base64.b64encode(
+                (json.dumps(new, indent=2, sort_keys=True) + "\n").encode()
+            ).decode(),
+            "sha": meta.get("sha"),
+        })
+    except Exception as exc:
+        log.info("dashboard: claim release failed: %s", exc)
+
+
 def drive_file_id(drive_path: str) -> str | None:
     """Create a public share link for the clip and return its Drive file id."""
     try:

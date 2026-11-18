@@ -1,0 +1,42 @@
+name: yt-probe
+run-name: YouTube extraction probe (runner IP + clients)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install yt-dlp
+        run: pip install -q yt-dlp
+      - name: Probe LofiGirl live with every client
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            echo "$YT_COOKIES" | base64 -d > /tmp/yt.txt
+            echo "cookies: PRESENT"
+            COOKIE=(--cookies /tmp/yt.txt)
+          else
+            echo "cookies: MISSING"
+            COOKIE=()
+          fi
+          for CLIENT in default android_vr web_embedded tv ios mweb; do
+            echo "=== client: $CLIENT ==="
+            if [ "$CLIENT" = "default" ]; then
+              yt-dlp -g -f "bv*+ba/b" --no-warnings "${COOKIE[@]}" \
+                "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -2
+            else
+              yt-dlp -g -f "bv*+ba/b" --no-warnings "${COOKIE[@]}" \
+                --extractor-args "youtube:player_client=$CLIENT" \
+                "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -2
+            fi
+          done
