@@ -10,33 +10,107 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Install yt-dlp
-        run: pip install -q yt-dlp
-      - name: Probe LofiGirl live with every client
+        run: |
+          pip install -q -U yt-dlp
+          echo "yt-dlp $(yt-dlp --version)"
+      - name: Decode cookies
         env:
           YT_COOKIES: ${{ secrets.YT_COOKIES }}
         run: |
           if [ -n "$YT_COOKIES" ]; then
             echo "$YT_COOKIES" | base64 -d > /tmp/yt.txt
-            echo "cookies: PRESENT"
-            COOKIE=(--cookies /tmp/yt.txt)
+            echo "cookies: PRESENT ($(wc -l < /tmp/yt.txt) lines)"
           else
             echo "cookies: MISSING"
-            COOKIE=()
+            : > /tmp/yt.txt
           fi
-          for CLIENT in default android_vr web_embedded tv ios mweb; do
+      - name: Probe live stream with every client
+        run: |
+          URL="https://www.youtube.com/@LofiGirl/live"
+          for CLIENT in default tv tv_simply web web_safari web_creator android android_vr ios mweb; do
             echo "=== client: $CLIENT ==="
-            if [ "$CLIENT" = "default" ]; then
-              yt-dlp -g -f "bv*+ba/b" --no-warnings "${COOKIE[@]}" \
-                "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -2
+            ARGS=()
+            if [ "$CLIENT" != "default" ]; then
+              ARGS=(--extractor-args "youtube:player_client=$CLIENT")
+            fi
+            if yt-dlp -g -f "bv*+ba/b" --no-warnings --cookies /tmp/yt.txt \
+                 "${ARGS[@]}" "$URL" > /tmp/out 2>/tmp/err; then
+              echo "OK  $(head -c 90 /tmp/out)"
             else
-              yt-dlp -g -f "bv*+ba/b" --no-warnings "${COOKIE[@]}" \
-                --extractor-args "youtube:player_client=$CLIENT" \
-                "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -2
+              echo "FAIL $(tail -1 /tmp/err | cut -c1-220)"
             fi
           done
+      - name: Control — same client without cookies
+        run: |
+          echo "=== no cookies, default client ==="
+          yt-dlp -g -f "bv*+ba/b" --no-warnings \
+            "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -1 | cut -c1-220
+          echo "=== no cookies, tv client ==="
+          yt-dlp -g -f "bv*+ba/b" --no-warnings \
+            --extractor-args "youtube:player_client=tv" \
+            "https://www.youtube.com/@LofiGirl/live" 2>&1 | tail -1 | cut -c1-220
+      - name: Control — regular (non-live) video
+        run: |
+          echo "=== regular video, default client ==="
+          yt-dlp -g -f "bv*+ba/b" --no-warnings --cookies /tmp/yt.txt \
+            "https://www.youtube.com/watch?v=aqz-KE-bpKQ" 2>&1 | tail -1 | cut -c1-220
+      - name: Verbose PO-token diagnostics
+        run: |
+          yt-dlp -v -F --cookies /tmp/yt.txt \
+            "https://www.youtube.com/@LofiGirl/live" 2>&1 \
+            | grep -iE "po.?token|player (client|url)|visitor|nsig|formats|error|warn|reload" \
+            | cut -c1-240 | head -50
+
+  pot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Decode cookies
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          echo "$YT_COOKIES" | base64 -d > /tmp/yt.txt
+          echo "cookies: $(wc -l < /tmp/yt.txt) lines"
+      - name: Start PO-token provider (docker)
+        run: |
+          docker run --name bgutil-provider -d --init \
+            -p 127.0.0.1:4416:4416 brainicism/bgutil-ytdlp-pot-provider
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:4416/ping >/dev/null && break
+            sleep 2
+          done
+          echo "ping: $(curl -s http://127.0.0.1:4416/ping)"
+      - name: Install yt-dlp + plugin
+        run: |
+          pip install -q -U yt-dlp bgutil-ytdlp-pot-provider
+          yt-dlp --version
+      - name: Extract with PO tokens
+        run: |
+          URL="https://www.youtube.com/@LofiGirl/live"
+          for CLIENT in default web web_safari tv mweb; do
+            echo "=== client: $CLIENT ==="
+            ARGS=()
+            if [ "$CLIENT" != "default" ]; then
+              ARGS=(--extractor-args "youtube:player_client=$CLIENT")
+            fi
+            if yt-dlp -g -f "bv*+ba/b" --no-warnings --cookies /tmp/yt.txt \
+                 "${ARGS[@]}" "$URL" > /tmp/out 2>/tmp/err; then
+              echo "OK  $(head -c 90 /tmp/out)"
+            else
+              echo "FAIL $(tail -1 /tmp/err | cut -c1-220)"
+            fi
+          done
+      - name: Verify token generation in verbose log
+        run: |
+          yt-dlp -v -g -f "bv*+ba/b" --cookies /tmp/yt.txt \
+            "https://www.youtube.com/@LofiGirl/live" 2>&1 \
+            | grep -iE "pot|token" | cut -c1-240 | head -25
