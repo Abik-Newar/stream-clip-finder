@@ -77,7 +77,22 @@ options:
   clip_command_trigger: true   # "clip it" chat spam / streamer voice command
   scene_snap: true       # snap clip boundaries to visual scene cuts
 
-  # Peak selection (v3)
+  # Clip finding/choosing — the gta6 picker (vendored from
+  # nocodehack/gta6-clipper, MIT) is the primary engine. It tags transcript
+  # lines with [LOUD]/[CHAT]/[HEAT], builds 15–32 s windows with the payoff
+  # near the end, links setup→payoff callbacks, and requires a verbatim
+  # spoken quote. Windows without a quote are bluffs and are dropped before
+  # the AI judge sees them. "legacy" restores the v3/v4 z-score scorer.
+  picker: gta6
+  picker_min_score: 2.5    # gta6 lscore floor for a window to be considered
+  picker_interval: 10      # seconds between transcript scans
+  picker_delay: 8          # ignore the newest N seconds (Whisper lag)
+  picker_top: 2            # candidates per scan
+  picker_max_seconds: 32   # story window cap (upstream default; max 90)
+  picker_min_talk: 14      # seconds of speech a window must contain
+  picker_fallback: true    # fall back to the legacy scorer after 3 errors
+
+  # Peak selection (v3) — used when picker is "legacy" or as fallback
   min_signals: 1         # independent signals that must agree
   peak_prominence: 1.0   # how far a peak must stand out from its saddle
   peak_min_distance: 30  # seconds between distinct peaks

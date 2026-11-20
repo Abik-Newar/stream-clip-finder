@@ -26,6 +26,18 @@ class Options:
     clip_command_trigger: bool = True  # "clip it" chat spam / voice commands
     scene_snap: bool = True        # snap cut points to visual scene cuts
 
+    # Clip finding/choosing — the gta6 picker is the primary engine.
+    # "gta6" = tag windows + callbacks + verbatim quote (15–32 s, peak near
+    # the end); "legacy" = the v3/v4 z-score scorer and best-of-lull arena.
+    picker: str = "gta6"
+    picker_min_score: float = 2.5  # gta6 score floor (loud/chat/heat/exc)
+    picker_interval: float = 10.0  # seconds between transcript scans
+    picker_delay: float = 8.0      # ignore the newest N s (Whisper lag)
+    picker_top: int = 2            # candidates per scan
+    picker_max_seconds: float = 32.0  # story window (upstream default)
+    picker_min_talk: float = 14.0  # seconds of speech a window must hold
+    picker_fallback: bool = True   # switch to legacy if the picker errors 3×
+
     # Peak selection (v3)
     min_signals: int = 1           # independent signals that must agree
     peak_prominence: float = 1.0   # how far a peak must stand out
@@ -83,6 +95,13 @@ def load_config(path: str = "config/channels.yml"):
         opts.no_upload = True
     if os.environ.get("SCF_MODEL"):
         opts.whisper_model = os.environ["SCF_MODEL"]
+    if os.environ.get("SCF_PICKER"):
+        opts.picker = os.environ["SCF_PICKER"].strip().lower()
+    if os.environ.get("SCF_PICKER_MIN_SCORE"):
+        try:
+            opts.picker_min_score = float(os.environ["SCF_PICKER_MIN_SCORE"])
+        except ValueError:
+            pass
     if os.environ.get("SCF_THRESHOLD"):
         try:
             opts.threshold = float(os.environ["SCF_THRESHOLD"])
@@ -90,6 +109,8 @@ def load_config(path: str = "config/channels.yml"):
             pass
     # Duration policy: clips are always strictly under 90 s
     opts.max_clip_seconds = min(float(opts.max_clip_seconds), 90.0)
+    opts.picker_max_seconds = min(float(opts.picker_max_seconds),
+                                  opts.max_clip_seconds)
     opts.min_clip_seconds = min(float(opts.min_clip_seconds),
                                 opts.max_clip_seconds - 5.0)
     opts.clip_length = min(int(opts.clip_length),

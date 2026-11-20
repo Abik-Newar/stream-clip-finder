@@ -62,8 +62,12 @@ Answer ONLY with JSON, no markdown:
  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4"]}
 
 Channel: {channel} ({platform} platform)
-Transcript (stream-relative timestamps):
+{hint}Transcript (stream-relative timestamps):
 {transcript}
+"""
+
+HINT = """The clip finder marked this line as the spoken payoff (verbatim, do not
+translate or rewrite it): {hint}
 """
 
 
@@ -118,15 +122,18 @@ def _parse(content, channel=""):
     }
 
 
-def _build_prompt(channel, platform, transcript):
+def _build_prompt(channel, platform, transcript, hint=""):
     """Fill the template without str.format — the JSON schema in the prompt
     contains literal braces, which format() would treat as fields."""
-    return (PROMPT.replace("{channel}", str(channel or "unknown"))
+    hint_text = HINT.replace("{hint}", str(hint or "")[:240]) if hint else ""
+    text = (PROMPT.replace("{hint}", hint_text)
+                  .replace("{channel}", str(channel or "unknown"))
                   .replace("{platform}", str(platform or "unknown"))
                   .replace("{transcript}", str(transcript or "")[-3500:]))
+    return text
 
 
-def rank_clip(transcript_text, channel="", platform="", wait_s=45):
+def rank_clip(transcript_text, channel="", platform="", wait_s=45, hint=None):
     """Judge a clip. Returns a validated verdict dict, or None if unavailable."""
     base, model, key = _endpoint()
     if not base or not transcript_text.strip():
@@ -136,7 +143,7 @@ def rank_clip(transcript_text, channel="", platform="", wait_s=45):
     except ImportError:
         return None
 
-    prompt = _build_prompt(channel, platform, transcript_text)
+    prompt = _build_prompt(channel, platform, transcript_text, hint or "")
     deadline = time.time() + max(0, wait_s)
     attempt = 0
     while True:

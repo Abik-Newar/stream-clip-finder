@@ -118,6 +118,35 @@ arbitrary. v3 instead:
 Each clip's manifest line records *why* it was chosen, e.g.
 `"trigger": "chat z12.4/u0.91, audio z6.8, keywords z9.1"`.
 
+### How a clip is chosen now (v5, gta6 picker)
+
+The z-score scorer still computes the signals, but it no longer decides what
+gets clipped. The default engine is the **gta6 picker**, vendored from
+[nocodehack/gta6-clipper](https://gitlab.com/nocodehack.io/gta6-clipper) (MIT,
+v1.0.13) and ported to the live transcript ring in
+`streamclip/gta6_pick.py`:
+
+1. Every 10 s it annotates recent transcript lines with the live signals:
+   `[LOUD +NdB]` (dB rise over ambient), `[CHAT xN]` (rate vs the previous
+   five minutes), `[HEAT 0-100]` (all signals fused into one number).
+2. It scores each line like upstream (`loud`, `chat`, `heat`, exclamations,
+   laughter, callbacks) and builds one window per peak: **15–32 s**, ~24 s
+   target, at least 14 s of speech, with the peak in the **last 60 %**.
+3. It looks for **setup→payoff callbacks** up to two hours apart, so a claim
+   and its payoff can be tied into one story.
+4. A window must contain a **verbatim spoken quote**. No quote = a bluff,
+   dropped before the AI judge. The quote is copied exactly — Hindi,
+   Hinglish, and every other language are kept in their own script.
+5. Windows are deduped by peak (30 s), then `SelectionGate` still applies the
+   cooldown, rolling quota, and overlap rules.
+
+The picker's `hook` and `quote` become the card's title/caption; the AI judge
+gets the quote as a hint. `GTA6` branding is still applied by `brand.py`,
+never by the model. `picker: legacy` in `config/channels.yml` restores the v3
+scorer; `SCF_PICKER=legacy` does the same for one run. The port is checked
+against the vendored upstream for window, hook, and heat parity in
+`workdir/test_gta6_pick.py`.
+
 What we deliberately skip (and why): in-game UI/kill-feed detection (Eklipse's
 game-specific models — per-title training is out of scope), face-cam tracking
 (framing concern, not detection), YAMNet laughter classifiers (too heavy for a

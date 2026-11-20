@@ -26,7 +26,8 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import audio, clipper, dashboard, livecheck, score as scoring, transcribe, upload
+from . import (audio, clipper, dashboard, gta6_pick, livecheck,
+               score as scoring, transcribe, upload)
 from .ai import rank_clip
 from .brand import apply_brand
 from .chat import make_chat
@@ -326,12 +327,19 @@ def transcribe_worker(q, t0, seg_time, scorer, ring, model_name, progress=None):
                 text = (seg.get("text") or "").strip()
                 if not text:
                     continue
+                if not transcribe.confident(seg):
+                    log.info("transcript (low confidence, skipped): %s",
+                             text[:120])
+                    continue
                 at = base + seg["start"]
+                end = base + seg["end"]
                 result = transcribe.analyze(text)
                 scorer.add_keywords(at, result["score"],
                                     command=result["command"])
                 tag = "★ CLIP COMMAND" if result["command"] else "transcript"
-                ring.append((at, tag, text))
+                ring.append({"at": at, "end": end, "tag": tag, "text": text,
+                             "avg_logprob": seg.get("avg_logprob"),
+                             "no_speech_prob": seg.get("no_speech_prob")})
                 log.info("%s: %s", tag, text[:120])
         except Exception as exc:  # keep the worker alive
             log.warning("transcription failed: %s", exc)
@@ -444,7 +452,8 @@ class SelectionGate:
         self.last_raise = t0
         self.last_decay = t0
         self.on_handle = on_handle or (lambda peak: None)
-        self.locked = bool((os.environ.get("SCF_THRESHOLD") or "").strip())
+        self.locked = bool((os.environ.get("SCF_THRESHOLD") or "").strip()) \
+            or str(getattr(opts, "picker", "")).lower() == "gta6"
 
     # ---------------------------------------------------------------- parts
 
@@ -501,7 +510,11 @@ class SelectionGate:
         self.on_handle(cand["peak"])
         self.arena = {"clip": cand["clip"], "score": cand["score"],
                       "reason": cand["reason"], "peak": cand["peak"],
-                      "born": now}
+                      "born": now,
+                      "quote": cand.get("quote"),
+                      "hook": cand.get("hook"),
+                      "tags": cand.get("tags"),
+                      "picker": cand.get("picker")}
 
     # ----------------------------------------------------------- main entry
 
@@ -600,7 +613,19 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
 
     stats = {"chat_messages": 0, "candidates": 0, "accepted": 0,
              "clips": 0, "last_score": None, "last_ai": None,
-             "last_clip": None, "last_error": None}
+             "last_clip": None, "last_error": None,
+             "picker_candidates": 0, "picker_score": None,
+             "picker_reason": None}
+
+    picker_mode = str(getattr(opts, "picker", "gta6") or "gta6").lower()
+    if picker_mode not in ("gta6", "legacy"):
+        log.warning("unknown picker %r — using gta6", picker_mode)
+        picker_mode = "gta6"
+    picker = gta6_pick.LivePicker(opts, t0, scorer) if picker_mode == "gta6" \
+        else None
+    picker_errors = 0
+    log.info("picker: %s (min score %.2f, window %.0fs)",
+             picker_mode, opts.picker_min_score, opts.picker_max_seconds)
 
     def _chat(at, user, text):
         stats["chat_messages"] += 1
@@ -637,20 +662,30 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
     def transcript_window(rel_start, rel_end):
         """Only the lines around this moment — keeps the judge focused."""
         lo, hi = t0 + rel_start - 8, t0 + rel_end + 6
-        lines = [(at, tag, text) for at, tag, text in list(ring)
-                 if lo <= at <= hi]
+        lines = [(e["at"], e["tag"], e["text"]) for e in list(ring)
+                 if lo <= e["at"] <= hi]
         if len(lines) < 3:             # transcription lag — use the latest
-            lines = list(ring)[-40:]
+            lines = [(e["at"], e["tag"], e["text"]) for e in list(ring)[-40:]]
         return "\n".join(
             f"[{int(at) // 60:02d}:{int(at) % 60:02d}] {tag}: {text}"
             for at, tag, text in lines)
 
-    def cut(t_start, t_end, score_val, reason, peak_t=None, accepted_at=None):
+    def cut(t_start, t_end, score_val, reason, peak_t=None, accepted_at=None,
+            meta=None):
         """Cut, judge, upload and publish one clip.
 
         `peak_t` (absolute epoch) and `accepted_at` let the log show the real
         moment→board latency, which is what the 3–5 minute target measures.
+        `meta` carries the gta6 picker's verbatim quote, hook and tags.
         """
+        meta = meta or {}
+        picker_quote = (meta.get("quote") or "").strip()
+        picker_hook = (meta.get("hook") or "").strip()
+        if picker_hook.upper() in ("WATCH THIS", "LOOK"):
+            picker_hook = ""           # upstream's generic last-resort hook
+        is_picker = meta.get("picker") == "gta6"
+        strong_bar = opts.picker_min_score if is_picker \
+            else opts.threshold * opts.strong_factor
         peak_t = peak_t if peak_t is not None else t_start
         accepted_at = accepted_at or time.time()
         perf = {}
@@ -684,7 +719,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                      rival, channel)
             return
         perf["cut"] = time.perf_counter() - mark
-        title = caption = hashtags = quote = None
+        title = caption = hashtags = None
+        quote = picker_quote or None
         if opts.ai_ranking:
             # Whisper lags a few seconds behind the video — wait until the
             # payoff itself is transcribed so the judge reads the actual
@@ -698,10 +734,11 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             perf["whisper_wait"] = time.perf_counter() - mark - perf["cut"]
             mark = time.perf_counter()
             verdict = rank_clip(transcript_window(rel_start, rel_end),
-                                channel, platform, wait_s=30)
+                                channel, platform, wait_s=30,
+                                hint=picker_quote or None)
             perf["ai"] = time.perf_counter() - mark
             if verdict is None:
-                if score_val < opts.threshold * opts.strong_factor:
+                if score_val < strong_bar:
                     out.unlink(missing_ok=True)
                     log.info("clip dropped: AI unavailable and signal %.2f is "
                              "not strong enough (no bluff) | peak→drop %.0fs "
@@ -710,22 +747,27 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                              perf.get("whisper_wait", 0), perf.get("ai", 0))
                     return
                 stats["last_ai"] = "unavailable"
-                log.info("AI unavailable — keeping strong-signal clip")
+                title = picker_hook or None
+                log.info("AI unavailable — keeping %s clip",
+                         "gta6" if is_picker else "strong-signal")
             else:
                 vscore = float(verdict.get("score") or 0)
-                quote = (verdict.get("quote") or "").strip()
+                # The picker quote is extracted by code and is verbatim by
+                # construction; prefer it over the 3B judge's copy.
+                quote = picker_quote or (verdict.get("quote") or "").strip() \
+                    or None
                 stats["last_ai"] = (f"keep={verdict.get('keep')} "
                                     f"score={vscore:.1f}")
                 log.info("AI verdict: keep=%s score=%.1f quote=%r",
                          verdict.get("keep"), vscore, quote or None)
                 rejected = verdict.get("keep") is False or bool(
                     vscore and vscore < opts.ai_min_score)
-                # Yield override: a genuinely strong signal (≥1.4×threshold)
-                # with a real transcribed quote is posted even when the 3B
-                # local judge shrugs. The gate exists to block BLUFFS — a clip
-                # with no quotable line — not loud, real moments. This is what
-                # turns "one clip an hour" into a flowing board.
-                strong = score_val >= opts.threshold
+                # Yield override: a genuinely strong signal with a real
+                # transcribed quote is posted even when the 3B local judge
+                # shrugs. The gate exists to block BLUFFS — a clip with no
+                # quotable line — not loud, real moments.
+                strong = score_val >= (opts.picker_min_score if is_picker
+                                       else opts.threshold)
                 if rejected and not (strong and quote):
                     stats["last_error"] = f"AI rejected ({vscore:.1f})"
                     out.unlink(missing_ok=True)
@@ -742,21 +784,22 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                              "keeping the clip", score_val)
                     # The judge's copy is negative by definition here: it
                     # called its own clip "awkward". Never publish that.
-                    # Use the verbatim line + neutral context instead.
-                    title = None
+                    # Use the picker hook + verbatim quote instead.
+                    title = picker_hook or None
                     caption = (f"{quote} — caught live on {channel}."
                                if quote else None)
                     hashtags = None
                 else:
-                    title = verdict.get("title")
+                    title = verdict.get("title") or picker_hook
                     caption = verdict.get("caption")
                     hashtags = verdict.get("hashtags")
-        # Never show a blank card: with no AI copy, use the verbatim quote.
+        # Never show a blank card: with no AI copy, use the picker hook and
+        # the verbatim quote. Both already exist in the clip's own language.
         if not title:
-            words = (quote or "").split()
-            title = " ".join(words[:8]) or f"{channel} live moment"
+            title = picker_hook or " ".join((quote or "").split()[:8]) \
+                or f"{channel} live moment"
         if not caption:
-            caption = quote or f"{channel} live moment."
+            caption = quote or picker_hook or f"{channel} live moment."
         if title and opts.title_template:
             try:
                 title = opts.title_template.format(
@@ -873,33 +916,55 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         # 3) finish pending clips whose tail has now been recorded
         coverage_end = t0 + last_idx * opts.segment_time
         for item in list(pending):
-            t_start, t_end, s, trig, peak, accepted = item
-            if coverage_end >= t_end:
-                cut(t_start, t_end, s, trig, peak, accepted)
+            if coverage_end >= item["end"]:
+                cut(item["start"], item["end"], item["score"], item["reason"],
+                    item["peak"], item["accepted"], item["meta"])
                 pending.remove(item)
 
-        # 4) peak-based selection with quality gates (v4)
+        # 4) clip finding/choosing — gta6 picker first, legacy scorer only
+        #    as a configured/runtime fallback.
         if now - t0 >= opts.min_uptime:
-            cands = scorer.candidates(
-                now,
-                threshold=opts.threshold,
-                min_signals=opts.min_signals,
-                prominence=opts.peak_prominence,
-                min_distance=opts.peak_min_distance,
-                pre_pad=opts.pre_pad,
-                reaction_tail=opts.reaction_tail,
-                min_clip=opts.min_clip_seconds,
-                max_clip=opts.max_clip_seconds)
+            enough = last_idx * opts.segment_time >= opts.min_clip_seconds
+            cands = []
+            if picker is not None:
+                try:
+                    cands = picker.scan(ring, now, channel, "")
+                    stats["picker_candidates"] += len(cands)
+                    if cands:
+                        best = max(cands, key=lambda c: c["score"])
+                        stats["picker_score"] = round(best["score"], 2)
+                        stats["picker_reason"] = best["reason"]
+                except Exception as exc:
+                    picker_errors += 1
+                    stats["last_error"] = f"gta6 picker: {exc}"
+                    log.warning("gta6 picker failed (%s/3): %s",
+                                picker_errors, exc)
+                    if opts.picker_fallback and picker_errors >= 3:
+                        log.warning("gta6 picker disabled after 3 failures — "
+                                    "falling back to the legacy scorer")
+                        picker = None
+            if picker is None:
+                cands = scorer.candidates(
+                    now,
+                    threshold=opts.threshold,
+                    min_signals=opts.min_signals,
+                    prominence=opts.peak_prominence,
+                    min_distance=opts.peak_min_distance,
+                    pre_pad=opts.pre_pad,
+                    reaction_tail=opts.reaction_tail,
+                    min_clip=opts.min_clip_seconds,
+                    max_clip=opts.max_clip_seconds)
             stats["candidates"] += len(cands)
             if cands:
                 stats["last_score"] = round(
                     max(c["score"] for c in cands), 2)
-            enough = last_idx * opts.segment_time >= opts.min_clip_seconds
             for cand in gate.observe(cands, now, enough):
                 stats["accepted"] += 1
-                pending.append((cand["clip"][0], cand["clip"][1],
-                                cand["score"], cand["reason"],
-                                cand["peak"], time.time()))
+                pending.append({
+                    "start": cand["clip"][0], "end": cand["clip"][1],
+                    "score": cand["score"], "reason": cand["reason"],
+                    "peak": cand["peak"], "accepted": time.time(),
+                    "meta": cand})
                 log.info("clip selected: %.2f | %s | %+.0fs..%+.0fs",
                          cand["score"], cand["reason"],
                          cand["clip"][0] - t0, cand["clip"][1] - t0)
@@ -913,6 +978,10 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
             "chat_connected": bool(chat),
             "chat_messages": stats["chat_messages"],
             "threshold": round(opts.threshold, 2),
+            "picker": picker_mode,
+            "picker_candidates": stats["picker_candidates"],
+            "picker_score": stats["picker_score"],
+            "picker_reason": stats["picker_reason"],
             "candidates": stats["candidates"],
             "accepted": stats["accepted"], "clips": stats["clips"],
             "arena_score": round(gate.arena["score"], 2)
@@ -937,6 +1006,10 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         "seconds": round(time.time() - t0), "segments": last_idx,
         "chat_connected": bool(chat),
         "chat_messages": stats["chat_messages"],
+        "picker": picker_mode,
+        "picker_candidates": stats["picker_candidates"],
+        "picker_score": stats["picker_score"],
+        "picker_reason": stats["picker_reason"],
         "candidates": stats["candidates"], "accepted": stats["accepted"],
         "clips": stats["clips"], "last_ai": stats["last_ai"],
         "last_clip": stats["last_clip"], "last_error": stats["last_error"],
@@ -952,13 +1025,17 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         pending.clear()
     elif gate.arena:
         a = gate.arena
-        pending.append((a["clip"][0], a["clip"][1], a["score"], a["reason"],
-                        a["peak"], time.time()))
+        pending.append({"start": a["clip"][0], "end": a["clip"][1],
+                        "score": a["score"], "reason": a["reason"],
+                        "peak": a["peak"], "accepted": time.time(),
+                        "meta": a})
         log.info("flushing best-of-lull candidate at stream end (%.2f)",
                  a["score"])
-    for t_start, t_end, s, trig, peak, accepted in pending:
-        cut(t_start, min(t_end, t0 + last_idx * opts.segment_time), s, trig,
-            peak, accepted)
+    for item in pending:
+        cut(item["start"],
+            min(item["end"], t0 + last_idx * opts.segment_time),
+            item["score"], item["reason"], item["peak"], item["accepted"],
+            item["meta"])
     _stop(reader)
     _stop(ffmpeg)
     if chat:

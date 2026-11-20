@@ -51,6 +51,23 @@ def hype_score(text: str) -> float:
     return analyze(text)["score"]
 
 
+def confident(seg: dict) -> bool:
+    """Filter Whisper hallucinations without dropping quiet Hindi speech.
+
+    `no_speech_prob` is high when the model thinks the chunk is silence/music;
+    `avg_logprob` is low when the decode is uncertain. A genuine quiet line
+    can be uncertain, so only a strong no-speech signal (or both signals at
+    once) rejects it.
+    """
+    nsp = seg.get("no_speech_prob")
+    alp = seg.get("avg_logprob")
+    if nsp is not None and nsp >= 0.85:
+        return False
+    if alp is not None and alp <= -1.2 and (nsp is None or nsp >= 0.5):
+        return False
+    return True
+
+
 class Transcriber:
     """Lazy-loaded faster-whisper model; safe to instantiate in a worker thread."""
 
@@ -71,5 +88,7 @@ class Transcriber:
             condition_on_previous_text=False,
             beam_size=1,
         )
-        return [{"start": s.start, "end": s.end, "text": s.text.strip()}
+        return [{"start": s.start, "end": s.end, "text": s.text.strip(),
+                 "avg_logprob": getattr(s, "avg_logprob", None),
+                 "no_speech_prob": getattr(s, "no_speech_prob", None)}
                 for s in segments if s.text and s.text.strip()]
