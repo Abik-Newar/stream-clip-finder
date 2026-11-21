@@ -180,6 +180,16 @@ ok("the branded caption keeps the verbatim quote",
    base_pick["quote"] in branded["caption"])
 
 
+# --------------------------------------------------------------- progress
+with patch.object(vod.dashboard, "write_progress") as wp:
+    st = vod.JobState(dry_run=True)
+    st.write("done", "done", "dry run: 1 clip(s) ready", 100, min_gap=0)
+    slot, doc = wp.call_args[0][0], wp.call_args[0][1]
+ok("progress uses the non-realtime slot", slot == "non-realtime")
+ok("progress carries the dry-run flag", doc.get("dry_run") is True)
+ok("progress timestamps are ISO", "T" in str(doc.get("updated")))
+
+
 # ---------------------------------------------------------------- cutting
 ff = shutil.which("ffmpeg")
 if not ff and Path("workdir/bin/ffmpeg").exists():

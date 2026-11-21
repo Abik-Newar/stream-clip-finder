@@ -835,7 +835,7 @@ function vodVisual() {
       cls: "live",
       label: run.status === "queued" ? "QUEUED" : "CLIPPING",
       stage: p && p.stage ? (VOD_STAGES[p.stage] || p.stage) : "starting a runner",
-      detail: p ? p.detail || "" : "waiting for a runner",
+      detail: p ? `${p.detail || ""}${p.dry_run ? " · dry run" : ""}` : "waiting for a runner",
       percent: p ? Number(p.percent || 0) : 0,
       title: p ? p.title || "" : "",
       channel: p ? p.channel || "" : "",
@@ -851,7 +851,7 @@ function vodVisual() {
   }
   if (run && run.status === "completed") {
     if (run.conclusion === "success") {
-      return { cls: "done", label: "DONE",
+      return { cls: "done", label: p && p.dry_run ? "DRY RUN" : "DONE",
         stage: "done",
         detail: (p && p.detail) || "finished",
         percent: 100,
@@ -871,8 +871,8 @@ function vodVisual() {
       lastError: (p && p.last_error) || "" };
   }
   if (p && p.state === "done") {
-    return { cls: "done", label: "DONE", stage: "done",
-      detail: p.detail || "finished", percent: 100,
+    return { cls: "done", label: p.dry_run ? "DRY RUN" : "DONE",
+      stage: "done", detail: p.detail || "finished", percent: 100,
       title: p.title || "", channel: p.channel || "",
       clips: Number(p.clips || 0), lastError: "" };
   }

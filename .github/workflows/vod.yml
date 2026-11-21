@@ -10,6 +10,10 @@ on:
       url:
         description: "YouTube video link (watch / shorts / youtu.be)"
         required: true
+      dry_run:
+        description: "Run the whole pipeline but do not upload or publish"
+        type: boolean
+        default: false
 
 concurrency:
   # One non-realtime job at a time. A new link replaces the old job so the
@@ -121,8 +125,11 @@ jobs:
           echo "AI setup running in background — download starts immediately"
       - name: Clip the video
         run: |
-          python -m streamclip.vod --url "${{ inputs.url }}"
+          EXTRA=""
+          if [ "$DRY_RUN" = "true" ]; then EXTRA="--no-upload"; fi
+          python -m streamclip.vod --url "${{ inputs.url }}" $EXTRA
         env:
+          DRY_RUN: ${{ inputs.dry_run }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AI_BASE_URL: http://localhost:11434/v1
           AI_MODEL: ${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}

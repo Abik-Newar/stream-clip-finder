@@ -414,11 +414,12 @@ def copy_for(pick: dict, verdict: dict | None, meta: dict) -> tuple[str, str, st
 # ------------------------------------------------------------------ progress
 
 class JobState:
-    def __init__(self) -> None:
+    def __init__(self, dry_run: bool = False) -> None:
         self.meta: dict = {}
         self.clips = 0
         self.last_clip = ""
         self.last_error = ""
+        self.dry_run = dry_run
         self.run_id = os.environ.get("GITHUB_RUN_ID", "")
 
     def write(self, state: str, stage: str, detail: str, percent: float,
@@ -438,6 +439,7 @@ class JobState:
             "clips": self.clips,
             "last_clip": self.last_clip,
             "last_error": self.last_error,
+            "dry_run": self.dry_run,
         }
         dashboard.write_progress(SLOT, doc, min_gap=min_gap)
 
@@ -446,7 +448,7 @@ class JobState:
 
 def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
         keep_temp: bool = False) -> int:
-    state = JobState()
+    state = JobState(dry_run=bool(getattr(opts, "no_upload", False)))
     run_dir = Path("workdir") / "vod" / \
         f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -559,10 +561,16 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
                      name, actual, dest)
 
         if state.clips:
-            state.write("done", "done",
-                        f"published {state.clips} clip(s) from "
-                        f"{meta['title'][:80]}", 100, min_gap=0)
-            log.info("non-realtime: published %d clip(s)", state.clips)
+            if state.dry_run:
+                detail = (f"dry run: {state.clips} clip(s) ready "
+                          f"(not uploaded) from {meta['title'][:80]}")
+            else:
+                detail = (f"published {state.clips} clip(s) from "
+                          f"{meta['title'][:80]}")
+            state.write("done", "done", detail, 100, min_gap=0)
+            log.info("non-realtime: %s %d clip(s)",
+                     "dry run kept" if state.dry_run else "published",
+                     state.clips)
         else:
             state.write("done", "done",
                         "no clip passed the quality gate", 100, min_gap=0)
