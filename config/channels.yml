@@ -111,6 +111,7 @@ options:
   threshold_ceiling: 6.0
   overlap_iou: 0.3       # reject cuts overlapping a recent clip
   quiet_decay: 0.97      # threshold decay step during quiet stretches
+  duplicate_gap: 120     # seconds before the same channel may post again
 
   # Intelligence — only real spoken payoffs reach the board
   transcription: true    # Whisper transcript feeds the judge

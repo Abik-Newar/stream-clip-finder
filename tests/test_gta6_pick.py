@@ -231,6 +231,13 @@ plain = ai._build_prompt("chan", "kick", "transcript")
 ok("AI prompt includes picker quote", "भाई ये क्या हो गया" in hinted)
 ok("AI prompt without hint stays clean", "भाई ये क्या हो गया" not in plain)
 
+# --------------------------------------------------- caption hygiene
+ok("hype caption rejected",
+   not ai.hype_free("This shocking moment is a must-watch!", "I'm gonna pee."))
+ok("quote may contain the word",
+   ai.hype_free("He called it insane", "this is insane"))
+ok("plain caption passes", ai.hype_free("He revealed the map", "look at this map"))
+
 # --------------------------------------------------- AI override floor
 o = Options()
 ok("picker override needs a real AI score",

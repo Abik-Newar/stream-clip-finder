@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import (audio, clipper, dashboard, gta6_pick, livecheck,
                score as scoring, transcribe, upload)
-from .ai import rank_clip
+from .ai import hype_free, rank_clip
 from .brand import apply_brand
 from .chat import make_chat
 from .config import Options, load_config
@@ -722,7 +722,7 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
         except Exception as exc:
             log.warning("clip cut failed: %s", exc)
             return
-        if _recent_same_channel(safe_channel):
+        if _recent_same_channel(safe_channel, gap_s=opts.duplicate_gap):
             out.unlink(missing_ok=True)
             log.info("duplicate dropped: %s already cut a moment seconds ago",
                      channel)
@@ -808,6 +808,10 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 else:
                     title = verdict.get("title") or picker_hook
                     caption = verdict.get("caption")
+                    if caption and not hype_free(caption, quote or ""):
+                        log.info("AI caption added hype — using the verbatim "
+                                 "quote instead")
+                        caption = None
                     hashtags = verdict.get("hashtags")
         # Never show a blank card: with no AI copy, use the picker hook and
         # the verbatim quote. Both already exist in the clip's own language.

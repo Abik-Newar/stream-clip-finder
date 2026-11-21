@@ -55,6 +55,7 @@ class Options:
     threshold_ceiling: float = 6.0 # auto-calibration upper bound
     overlap_iou: float = 0.3       # max overlap allowed with a recent cut
     quiet_decay: float = 0.97      # threshold decay step during quiet stretches
+    duplicate_gap: int = 120       # seconds before the same channel may post again
 
     # Storage
     keep_buffer: int = 900         # seconds of segments kept on disk

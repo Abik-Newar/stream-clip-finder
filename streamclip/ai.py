@@ -53,6 +53,11 @@ transcript, it is not a clip.
 Score virality 1-10 (10 = would blow up the internet). Be honest: most
 stream talk is 1-3. Only 7+ deserves to be posted.
 
+CAPTION RULES: describe only what the quote says and what the transcript
+shows. Never add details, people, stakes or reactions that are not in the
+transcript. No hype words ("shocking", "must-watch", "you won't believe")
+unless the streamer said them.
+
 Answer ONLY with JSON, no markdown:
 {"keep": true|false,
  "score": 1-10,
@@ -82,6 +87,21 @@ def _endpoint():
     if key:                                    # OpenAI / other cloud provider
         return "https://api.openai.com/v1", model or "gpt-4o-mini", key
     return None, None, None                    # AI ranking disabled
+
+
+HYPE = re.compile(
+    r"\b(shocking|must[- ]watch|you won'?t believe|unbelievable|jaw[- ]dropping|"
+    r"mind[- ]blowing|clickbait)\b", re.I)
+
+
+def hype_free(caption, quote=""):
+    """True when the caption doesn't add promotional hype the streamer never said."""
+    text = str(caption or "")
+    if not text:
+        return True
+    if not HYPE.search(text):
+        return True
+    return bool(HYPE.search(str(quote or "")))
 
 
 def _clean(value, limit=300):
