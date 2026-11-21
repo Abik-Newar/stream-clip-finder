@@ -37,6 +37,8 @@ class Options:
     picker_max_seconds: float = 32.0  # story window (upstream default)
     picker_min_talk: float = 14.0  # seconds of speech a window must hold
     picker_fallback: bool = True   # switch to legacy if the picker errors 3×
+    picker_warmup: float = 180.0   # let the AI judge load before emitting picks
+    picker_override_min: float = 3.0  # AI score floor to override a rejection
 
     # Peak selection (v3)
     min_signals: int = 1           # independent signals that must agree

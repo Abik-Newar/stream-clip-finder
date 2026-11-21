@@ -140,6 +140,11 @@ v1.0.13) and ported to the live transcript ring in
 5. Windows are deduped by peak (30 s), then `SelectionGate` still applies the
    cooldown, rolling quota, and overlap rules.
 
+The picker waits `picker_warmup` (180 s) before its first scan so the local AI
+judge is loaded, and a rejected AI verdict is only overridden when the judge
+scores it at least `picker_override_min` (3/10). A loud line with garbled ASR
+therefore does not get posted on signal strength alone.
+
 The picker's `hook` and `quote` become the card's title/caption; the AI judge
 gets the quote as a hint. `GTA6` branding is still applied by `brand.py`,
 never by the model. `picker: legacy` in `config/channels.yml` restores the v3

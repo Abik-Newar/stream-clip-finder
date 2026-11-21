@@ -593,6 +593,21 @@ def _recent_same_channel(name_prefix, gap_s=480):
 
 # ------------------------------------------------------------------ capturing
 
+def picker_override_ok(opts, is_picker, strong, quote, vscore):
+    """May a rejected AI verdict still be published?
+
+    Legacy clips keep the old yield override (a strong signal + a real
+    transcribed quote). Picker clips have a quote by construction, so the
+    judge must at least see *something* (picker_override_min) — otherwise a
+    loud, word-salad line gets posted on signal strength alone.
+    """
+    if not (strong and quote):
+        return False
+    if not is_picker:
+        return True
+    return vscore >= float(getattr(opts, "picker_override_min", 3.0))
+
+
 def capture_channel(platform, channel, reader_spec, opts, stop,
                     my_run_id="", my_slot=""):
     """Capture one channel until its live ends.
@@ -768,7 +783,8 @@ def capture_channel(platform, channel, reader_spec, opts, stop,
                 # quotable line — not loud, real moments.
                 strong = score_val >= (opts.picker_min_score if is_picker
                                        else opts.threshold)
-                if rejected and not (strong and quote):
+                if rejected and not picker_override_ok(
+                        opts, is_picker, strong, quote, vscore):
                     stats["last_error"] = f"AI rejected ({vscore:.1f})"
                     out.unlink(missing_ok=True)
                     log.info("AI rejected the clip (score %.1f < %.1f) — "

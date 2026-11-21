@@ -641,6 +641,9 @@ class LivePicker:
         self.last_reason = ""
 
     def scan(self, ring, now, channel="", title=""):
+        warmup = float(getattr(self.opts, "picker_warmup", 0.0))
+        if warmup and now - self.t0 < warmup:
+            return []                  # AI judge is still loading
         interval = float(getattr(self.opts, "picker_interval", 10.0))
         if now - self.last_scan < interval:
             return []

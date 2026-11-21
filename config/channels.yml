@@ -91,6 +91,8 @@ options:
   picker_max_seconds: 32   # story window cap (upstream default; max 90)
   picker_min_talk: 14      # seconds of speech a window must contain
   picker_fallback: true    # fall back to the legacy scorer after 3 errors
+  picker_warmup: 180       # let the AI judge load before the first scan
+  picker_override_min: 3.0 # AI score floor to override a rejection (1-10)
 
   # Peak selection (v3) — used when picker is "legacy" or as fallback
   min_signals: 1         # independent signals that must agree

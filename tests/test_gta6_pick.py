@@ -175,6 +175,7 @@ ring.append({"at": BASE + 302, "end": BASE + 306,
 
 opts = Options()
 opts.picker = "gta6"
+opts.picker_warmup = 0
 lp = g.LivePicker(opts, BASE, sc)
 first = lp.scan(ring, BASE + 310, "Kai Cenat", "")
 ok("live scan finds pick", len(first) == 1, str(first))
@@ -189,6 +190,10 @@ if first:
 second = lp.scan(ring, BASE + 321, "Kai Cenat", "")
 ok("live scan dedupes peak", second == [], str(second))
 
+warm = g.LivePicker(Options(), BASE, sc)
+ok("warmup blocks early scans", warm.scan(ring, BASE + 100, "Kai Cenat") == [])
+ok("warmup opens later", len(warm.scan(ring, BASE + 310, "Kai Cenat")) == 1)
+
 annotated = g.annotate(ring, sc, BASE + 310, delay=8)
 ok("confidence filter drops hallucination",
    all("hallucinated" not in l["plain"] for l in annotated))
@@ -201,7 +206,7 @@ ok("annotate adds HEAT", peak_line and "[HEAT" in peak_line["txt"],
    peak_line["txt"] if peak_line else "missing")
 
 # --------------------------------------------------------- gate metadata
-from streamclip.capture import SelectionGate  # noqa: E402
+from streamclip.capture import SelectionGate, picker_override_ok  # noqa: E402
 
 opts2 = Options()
 opts2.picker = "legacy"
@@ -225,6 +230,17 @@ hinted = ai._build_prompt("chan", "kick", "transcript", "भाई ये क्
 plain = ai._build_prompt("chan", "kick", "transcript")
 ok("AI prompt includes picker quote", "भाई ये क्या हो गया" in hinted)
 ok("AI prompt without hint stays clean", "भाई ये क्या हो गया" not in plain)
+
+# --------------------------------------------------- AI override floor
+o = Options()
+ok("picker override needs a real AI score",
+   picker_override_ok(o, True, True, "quote", 3.5))
+ok("picker override blocks a 1/10 reject",
+   not picker_override_ok(o, True, True, "quote", 1.0))
+ok("legacy override keeps its old rule",
+   picker_override_ok(o, False, True, "quote", 1.0))
+ok("no quote never overrides",
+   not picker_override_ok(o, True, True, "", 9.0))
 
 failed = 0
 for name, passed, detail in RESULTS:
