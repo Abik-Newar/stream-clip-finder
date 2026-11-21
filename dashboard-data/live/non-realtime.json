@@ -1,0 +1,17 @@
+{
+  "channel": "",
+  "clips": 0,
+  "detail": "reading video metadata",
+  "dry_run": true,
+  "duration": 0,
+  "last_clip": "",
+  "last_error": "",
+  "percent": 2,
+  "run_id": "44964406499",
+  "slot": "non-realtime",
+  "stage": "probe",
+  "state": "processing",
+  "title": "",
+  "updated": "2026-11-21T23:59:57.987436+00:00",
+  "video_id": ""
+}
