@@ -145,7 +145,7 @@ gets the quote as a hint. `GTA6` branding is still applied by `brand.py`,
 never by the model. `picker: legacy` in `config/channels.yml` restores the v3
 scorer; `SCF_PICKER=legacy` does the same for one run. The port is checked
 against the vendored upstream for window, hook, and heat parity in
-`workdir/test_gta6_pick.py`.
+`tests/test_gta6_pick.py`.
 
 What we deliberately skip (and why): in-game UI/kill-feed detection (Eklipse's
 game-specific models — per-title training is out of scope), face-cam tracking

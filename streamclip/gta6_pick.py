@@ -135,6 +135,8 @@ def hook(win, name, title=""):
         text = " ".join(text.strip(" .,!?:;\"()").split()).upper()
         if not text or re.search(r"[-–—…]|\.{2,}", text):
             return ""
+        if GENERIC_HOOK.match(text):
+            return ""               # "watch this" is not a hook
         words = text.split()
         if words[-1].strip("'\"").lower() in DANGLING:
             return ""
@@ -193,12 +195,59 @@ def _sentences(text):
     return [p.strip() for p in parts if p.strip()]
 
 
-def _quote_value(line, sentence):
+GREETING = re.compile(
+    r"^\s*(?:hi|hey|hello|yo|sup|what'?s up|good (?:morning|afternoon|evening|night)|"
+    r"welcome(?:\s+back)?(?:\s+to\s+the\s+(?:stream|show))?|"
+    r"here (?:you are|you go|we are|we go)(?:,?\s+(?:guys|chat|everyone|boys|folks))?|"
+    r"namaste|namaskar|kya haal|kaise ho(?: sab)?|"
+    r"नमस्ते|नमस्कार|हैलो|स्वागत|कैसे हो|क्या हाल)", re.I)
+FILLER = re.compile(
+    r"\b(?:thanks?(?:\s+you)?|shout\s?out|subscribe|follow(?:ing)?|"
+    r"like the (?:stream|video)|donat(?:e|ion|ions)|subs?(?:cribe)?|bits|raid|host|"
+    r"sponsor|discord|merch|link in (?:the )?description)\b|"
+    r"धन्यवाद|शुक्रिया|सब्सक्राइब|फॉलो|डोनेशन", re.I)
+GENERIC_HOOK = re.compile(
+    r"^(?:watch this|look(?: at this)?|check this out|watch|listen)$", re.I)
+SUPERLATIVE = re.compile(
+    r"\b(never|always|ever|first|last|best|worst|biggest|smallest|fastest|"
+    r"slowest|most|least|everyone|everybody|nobody|nothing|everything|"
+    r"million|billion|trillion|hundred|thousand|times|x\d+)\b|"
+    r"\d", re.I)
+
+
+def _quote_ok(sentence, peak_line, line):
+    """Is this sentence a real spoken payoff, not a greeting or filler?
+
+    Live streams are full of loud hellos, thank-yous, and sub reads — they
+    can top the chat/audio tags while saying nothing a stranger would clip.
+    A quote needs a cue (reaction, claim, laughter, Hindi/Hinglish cue), a
+    number/superlative, or a substantive statement; three words minimum.
+    """
+    text = " ".join((sentence or "").split())
+    low = text.lower()
+    words = re.findall(r"[^\W\d_]+", text, re.UNICODE)
+    if len(words) < 3 or len(text) < 8:
+        return False
+    if GREETING.match(text):
+        return False
+    if FILLER.search(text) and len(words) <= 9:
+        return False
+    cue = bool(EXC.search(low) or CLAIM.match(low) or LAUGH.search(low)
+               or MULTI_CUE.search(text) or SUPERLATIVE.search(text))
+    if not cue and len(words) < 7:
+        return False
+    # "Watch this" / "look at this" is a promise, not the payoff.
+    if re.fullmatch(r"(?:watch|look at|check) this[.!]?", low):
+        return False
+    return True
+
+
+def _quote_value(line, sentence, peak_line=None):
     """How likely this sentence is the spoken payoff (higher = better)."""
     low = sentence.lower()
-    words = re.findall(r"[^\W\d_]+", sentence, re.UNICODE)
-    if len(words) < 2 or len(sentence.strip()) < 8:
+    if not _quote_ok(sentence, peak_line, line):
         return -1.0
+    words = re.findall(r"[^\W\d_]+", sentence, re.UNICODE)
     score = 0.0
     if EXC.search(low):
         score += 3.0
@@ -208,6 +257,8 @@ def _quote_value(line, sentence):
         score += 2.0
     if MULTI_CUE.search(sentence):
         score += 2.0
+    if SUPERLATIVE.search(sentence):
+        score += 0.8
     if sentence.rstrip().endswith(("!", "?", "।")):
         score += 0.6
     if BAD_START.match(sentence):
@@ -216,6 +267,8 @@ def _quote_value(line, sentence):
     # premise; allow it only when a tag carries the context.
     if len(words) <= 3 and not (EXC.search(low) or MULTI_CUE.search(sentence)):
         score -= 1.0
+    if peak_line is not None and line is peak_line:
+        score += 0.6                  # the payoff line itself
     score += min(lscore(line), 8.0) * 0.35
     score += min(len(words), 24) / 24.0
     return score
@@ -237,15 +290,15 @@ def quote(win):
         if line["s"] > peak["s"] + 3.0:
             continue
         for sentence in _sentences(line.get("plain", "")):
-            score = _quote_value(line, sentence)
+            score = _quote_value(line, sentence, peak)
             if score > best_score:
                 best, best_score, best_line = sentence, score, line
     if best and best_score > 0:
         return best, best_line
-    # No English cue matched: keep the peak line verbatim if it has words.
+    # No English cue matched: keep the peak line verbatim if it has words
+    # and is a real statement, never a greeting or a sub read.
     text = " ".join((peak.get("plain") or "").split())
-    words = re.findall(r"[^\W\d_]+", text, re.UNICODE)
-    if len(words) >= 2 and len(text) >= 8:
+    if _quote_ok(text, peak, peak):
         return text, peak
     return "", None
 
@@ -437,7 +490,7 @@ def callbacks(lines, min_gap=300, max_gap=7200, top=10):
 
 # ------------------------------------------------------------------ picking
 def pick(lines, name="", title="", n=10, max_w=MAX_W, min_talk=MIN_TALK,
-         min_score=0.0, require_quote=True):
+         min_score=0.0, require_quote=True, origin=0.0):
     """Choose the best non-overlapping windows from tagged transcript lines.
 
     Returns dicts with `s`, `e`, `peak`, `score`, `score_tag`, `tags`,
@@ -459,7 +512,7 @@ def pick(lines, name="", title="", n=10, max_w=MAX_W, min_talk=MIN_TALK,
         if require_quote and tag == "-":
             continue                      # no peak signal in the window
         peak_line = max(win, key=lscore)
-        reason = f"gta6 {tag} peak {peak_line['s']:.0f}s"
+        reason = f"gta6 {tag} peak {peak_line['s'] - origin:.0f}s"
         if any(abs(peak_line["s"] - r["payoff"][0]) < 2 for r in found):
             reason += " + callback payoff"
         cands.append({
@@ -602,7 +655,7 @@ class LivePicker:
         min_score = float(getattr(self.opts, "picker_min_score", 2.5))
         top = int(getattr(self.opts, "picker_top", 2))
         picks = pick(lines, name=channel, title=title, n=top,
-                     max_w=max_w, min_score=min_score)
+                     max_w=max_w, min_score=min_score, origin=self.t0)
         out = []
         for p in picks:
             if any(abs(p["peak"] - seen) < 30.0 for seen in self.seen):
