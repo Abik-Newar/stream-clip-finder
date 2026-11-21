@@ -394,6 +394,56 @@ select.chip { appearance: none; padding-right: 26px;
 .atile-x { margin-right: auto; color: var(--faint); }
 .atile-x:hover { color: var(--danger); border-color: rgba(229, 72, 77, 0.45); background: var(--danger-soft); }
 .atile-foot { margin-top: 6px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+
+/* ---------------------------------------------------- non-realtime (YouTube video) */
+.nr-panel {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 18px 0 6px; padding: 16px;
+  background: linear-gradient(120deg, rgba(255, 59, 48, 0.10), rgba(214, 0, 110, 0.06) 58%, rgba(78, 110, 224, 0.08));
+  border: 1px solid rgba(255, 59, 48, 0.32);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.24);
+}
+.nr-panel--live {
+  border-color: rgba(46, 160, 67, 0.5);
+  box-shadow: 0 0 28px rgba(46, 160, 67, 0.12), 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+.nr-panel--done { border-color: rgba(78, 110, 224, 0.45); }
+.nr-panel--err { border-color: rgba(229, 72, 77, 0.55); }
+.nr-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.nr-titlebox { min-width: 0; }
+.nr-title { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.nr-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.nr-state { margin-left: auto; }
+.nr-panel--live .nr-state { color: #9fe8b2; }
+.nr-panel--live .nr-state .tdot {
+  background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.nr-panel--done .nr-state { color: #cdd8ff; }
+.nr-panel--err .nr-state { color: #ffb3b5; }
+.nr-panel--err .nr-state .tdot { background: var(--danger); }
+.nr-watch { margin-top: 0; }
+.nr-err { font-size: 11px; color: #ffb3b5; line-height: 1.3; }
+.nr-err:empty { display: none; }
+.nr-meta {
+  font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nr-bar {
+  height: 4px; border-radius: 999px; overflow: hidden;
+  background: rgba(11, 14, 20, 0.65);
+}
+.nr-bar > span {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--youtube), var(--accent));
+  transition: width 0.4s ease;
+}
+.nr-detail { font-size: 11.5px; color: var(--muted); }
+.nr-note { font-size: 10.5px; color: var(--faint); }
+.nr-chip { color: #ffb199; border-color: rgba(255, 107, 94, 0.4); }
+.modal-source { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.modal-source a { color: var(--accent); }
 @keyframes pulse {
   0%, 100% { box-shadow: 0 0 0 3px var(--ok-soft); }
   50% { box-shadow: 0 0 0 7px rgba(46, 160, 67, 0.07); }

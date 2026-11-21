@@ -94,6 +94,12 @@ options:
   picker_warmup: 180       # let the AI judge load before the first scan
   picker_override_min: 3.0 # AI score floor to override a rejection (1-10)
 
+  # Non-realtime (finished YouTube video) clipping
+  vod_max_clips: 4         # clips published per video
+  vod_max_minutes: 90      # refuse videos longer than this
+  vod_min_gap: 45          # seconds between VOD clip peaks
+  vod_override_min: 7.0    # AI score floor for a VOD override (1-10)
+
   # Peak selection (v3) — used when picker is "legacy" or as fallback
   min_signals: 1         # independent signals that must agree
   peak_prominence: 1.0   # how far a peak must stand out from its saddle

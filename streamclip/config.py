@@ -40,6 +40,12 @@ class Options:
     picker_warmup: float = 180.0   # let the AI judge load before emitting picks
     picker_override_min: float = 3.0  # AI score floor to override a rejection
 
+    # Non-realtime (finished YouTube video) clipping
+    vod_max_clips: int = 4         # clips published per video
+    vod_max_minutes: int = 90      # refuse videos longer than this
+    vod_min_gap: int = 45          # seconds between VOD clip peaks
+    vod_override_min: float = 7.0  # AI score floor for a VOD override
+
     # Peak selection (v3)
     min_signals: int = 1           # independent signals that must agree
     peak_prominence: float = 1.0   # how far a peak must stand out
@@ -105,6 +111,15 @@ def load_config(path: str = "config/channels.yml"):
             opts.picker_min_score = float(os.environ["SCF_PICKER_MIN_SCORE"])
         except ValueError:
             pass
+    for env, attr, cast in (
+            ("SCF_VOD_MAX_CLIPS", "vod_max_clips", int),
+            ("SCF_VOD_MAX_MINUTES", "vod_max_minutes", int),
+            ("SCF_VOD_MIN_GAP", "vod_min_gap", int)):
+        if os.environ.get(env):
+            try:
+                setattr(opts, attr, cast(os.environ[env]))
+            except ValueError:
+                pass
     if os.environ.get("SCF_THRESHOLD"):
         try:
             opts.threshold = float(os.environ["SCF_THRESHOLD"])

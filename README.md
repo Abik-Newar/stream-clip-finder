@@ -52,6 +52,7 @@ agent cuts a clip ──► Google Drive (video, permanent)
 | **Star** | star a clip to bookmark it as your best; `★ Starred` filter |
 | **Archive lifecycle** | `done` leaves the board and is kept for **3 days** (restorable as *not started*), then the monitor purges the row permanently — the video stays in Drive either way |
 | **Watch** | plays from Google Drive in a modal (share link created automatically per clip) |
+| **Non-realtime** | paste a finished YouTube video link; one job downloads, transcribes, and clips up to 4 moments |
 | **Start/Stop** | one click — dispatches `start.yml` / `stop.yml` via the GitHub API; live agent count shown in the header |
 | **Auto-refresh** | polls the repo every 20 s; new clips appear as tasks automatically |
 
@@ -182,6 +183,39 @@ dashboard: paste link + Watch
   tasks. Capture jobs exist only because you pressed Watch.
 - **Fresh baseline per channel:** switching channels resets the scorer, so
   each stream is judged against its own normal chat pace.
+
+## Non-realtime — clip a finished YouTube video
+
+The Agents page also has a **Non-realtime** box. Paste any finished YouTube
+video link (watch, `youtu.be`, shorts, or a past live link) and press
+**Clip video**:
+
+```
+dashboard: paste a YouTube video link + Clip video
+   └─ dispatch vod.yml(url)
+        └─ NON-REALTIME JOB (one video, once)
+             ├─ yt-dlp downloads ≤720p
+             ├─ ffmpeg extracts audio + Whisper transcribes
+             ├─ gta6 picker finds 15–32 s moments with a verbatim quote
+             ├─ AI judges each moment (same 1–10 bar)
+             └─ up to 4 clips → Drive → board
+```
+
+- It is **not one of the nine agents**: no live watching, no creator claim,
+  no auto-dispatch, and it does not count toward Start/Stop. It runs once and
+  exits.
+- Clips are `youtube` rows with a `non-realtime` chip and a link back to the
+  source video.
+- `GTA6` is forced into every title, caption, and hashtags, exactly like live
+  clips; the quote stays verbatim.
+- One job at a time: submitting a new link replaces the current non-realtime
+  job. The tile also has a Stop button.
+- Up to `vod_max_clips` (4) clips per video, `vod_max_minutes` (90) max video
+  length, and `vod_min_gap` (45 s) between picks.
+- YouTube may bot-check GitHub runner IPs. If the job fails with a bot-check,
+  set the same `YT_COOKIES` secret used by the YouTube live agents.
+- A link that is currently live is rejected — paste it into a YouTube live
+  agent tile instead.
 
 ## Start / Stop — one link at a time
 

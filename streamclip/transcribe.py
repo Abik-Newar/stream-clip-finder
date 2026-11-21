@@ -76,9 +76,14 @@ class Transcriber:
         self._model = WhisperModel(model_name, device=device,
                                    compute_type=compute_type)
 
-    def transcribe(self, path):
-        """Return [{"start", "end", "text"}] for one segment file."""
-        segments, _info = self._model.transcribe(
+    def transcribe(self, path, progress=None):
+        """Return [{"start", "end", "text"}] for one segment file.
+
+        `progress(end_seconds, total_seconds)` is called while the generator
+        yields segments. The live path ignores it; the non-realtime VOD path
+        uses it to keep its dashboard heartbeat moving during long videos.
+        """
+        segments, info = self._model.transcribe(
             str(path),
             # language=None → auto-detect per segment, so Hindi, Hinglish,
             # Spanish, Arabic… all get transcribed and can be clipped.
@@ -88,7 +93,18 @@ class Transcriber:
             condition_on_previous_text=False,
             beam_size=1,
         )
-        return [{"start": s.start, "end": s.end, "text": s.text.strip(),
-                 "avg_logprob": getattr(s, "avg_logprob", None),
-                 "no_speech_prob": getattr(s, "no_speech_prob", None)}
-                for s in segments if s.text and s.text.strip()]
+        total = float(getattr(info, "duration", 0) or 0)
+        out = []
+        for s in segments:
+            if s.text and s.text.strip():
+                out.append({"start": s.start, "end": s.end,
+                            "text": s.text.strip(),
+                            "avg_logprob": getattr(s, "avg_logprob", None),
+                            "no_speech_prob": getattr(s, "no_speech_prob",
+                                                      None)})
+            if progress:
+                try:
+                    progress(float(s.end), total)
+                except Exception:
+                    pass
+        return out

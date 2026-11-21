@@ -368,6 +368,10 @@ def publish_clip(entry: dict, drive_dest: str) -> None:
             "starred": False,
             "done_at": None,
         }
+        # Non-realtime rows keep a link back to the source video.
+        for key in ("source", "video_id", "video_url", "video_title"):
+            if entry.get(key):
+                doc[key] = entry[key]
         repo = _repo()
         status = put_file(repo, f"{DATA_DIR}/{clip_key}.json",
                           json.dumps(doc, indent=2, sort_keys=True) + "\n",

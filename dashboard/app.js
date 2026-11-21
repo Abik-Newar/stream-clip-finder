@@ -111,6 +111,11 @@ const state = {
   runs: [],              // live runs only: {slot, platform, channel, status, id, created}
   agentState: {},        // {slot: {platform, channel, run_id, since}}
   drafts: {},            // slot → pasted link in the tile's watch input
+  vod: null,             // live/non-realtime.json: one-shot video job state
+  vodRun: null,          // latest vod workflow run
+  vodDraft: "",          // YouTube video link in the Non-realtime tile
+  vodBusy: false,
+  vodError: null,
   openClip: null,        // clip shown in the modal (for copy buttons)
   busy: new Set(),
   armed: null,           // {kind:"delete"|"remove", key, at} — second click confirms
@@ -261,11 +266,19 @@ async function deleteClip(clip) {
 /* ------------------------------------------------------- agents (9 slots) */
 
 async function loadAgents() {
-  const [listing, runsJson, stateList] = await Promise.all([
+  const [listing, runsJson, stateList, vodDoc] = await Promise.all([
     gh(`/repos/${REPO}/contents/${AGENTS_PATH}`),
     gh(`/repos/${REPO}/actions/runs?per_page=40`),
     gh(`/repos/${REPO}/contents/dashboard-data/agent-state`).catch(() => null),
+    gh(`/repos/${REPO}/contents/dashboard-data/live/non-realtime.json`)
+      .catch(() => null),
   ]);
+  state.vod = null;
+  if (vodDoc && typeof vodDoc.content === "string") {
+    try {
+      state.vod = JSON.parse(atob(vodDoc.content.replace(/\s/g, "")));
+    } catch { /* the tile falls back to the workflow run state */ }
+  }
   if (listing && typeof listing.content === "string") {
     try {
       const b64 = listing.content.replace(/\s/g, "");
@@ -278,17 +291,22 @@ async function loadAgents() {
     state.agentsDoc = { slots: {}, sha: null };
   }
   const runs = [];
-  for (const r of runsJson.workflow_runs || []) {
+  let vodRun = null;
+  for (const r of (runsJson && runsJson.workflow_runs) || []) {
     const parts = (r.display_title || "").split("|");
     if (parts.length >= 4 && parts[0] === "clip-capture") {
       runs.push({
         slot: parts[3], platform: parts[1], channel: parts[2],
         status: r.status, id: r.id, created: r.created_at,
       });
+    } else if (!vodRun && parts[0] === "non-realtime") {
+      vodRun = { id: r.id, status: r.status, conclusion: r.conclusion,
+        url: parts.slice(1).join("|"), created: r.created_at };
     }
   }
   state.runs = runs.filter((r) =>
     r.status === "in_progress" || r.status === "queued");
+  state.vodRun = vodRun;
   state.agentState = {};
   if (Array.isArray(stateList)) {
     const docs = await Promise.all(stateList
@@ -384,6 +402,18 @@ async function dispatchCapture(platform, slot, channel = "", threshold = "") {
   // almost always a token without Actions: write. Never report it as Watch.
   if (res === null) {
     throw new Error("GitHub 404 — the token needs Actions: write on this repo");
+  }
+}
+
+async function dispatchVod(url) {
+  const res = await gh(`/repos/${REPO}/actions/workflows/vod.yml/dispatches`, {
+    method: "POST",
+    body: { ref: "main", inputs: { url } },
+  });
+  // gh() maps HTTP 404 to null. A missing vod.yml (not on main yet) or a
+  // token without Actions: write must never look like a successful Clip.
+  if (res === null) {
+    throw new Error("GitHub 404 — vod.yml must be on main and the token needs Actions: write");
   }
 }
 
@@ -611,6 +641,8 @@ function cardHTML(c) {
       <span class="meta-item">${ICONS.clock} ${relTime(c.created_at)}</span>
       <span class="meta-item mono">${fmtDur(c.duration)}</span>
       <span class="scorechip">score ${Number(c.score || 0).toFixed(1)}</span>
+      ${c.source === "non-realtime"
+        ? '<span class="meta-item nr-chip">non-realtime</span>' : ""}
       ${pillFor(c)}
     </div>
     ${c.trigger ? `<div class="trigger-line">${esc(c.trigger)}</div>` : ""}
@@ -767,13 +799,133 @@ function watchDraft(raw, slot) {
   const parsed = parseStreamUrl(raw, platform);
   let msg = "";
   if (String(raw || "").trim()) {
-    if (!parsed) msg = "not a twitch / kick / youtube link";
+    if (!parsed) {
+      msg = parseVideoUrl(raw)
+        ? "that's a video link — use the Non-realtime box above"
+        : "not a twitch / kick / youtube live link";
+    }
     else if (parsed.platform !== platform) {
       msg = `this is a ${platform} agent — paste a ${platform} link`;
     }
   }
   return { platform, parsed, msg,
     enabled: !!(parsed && parsed.platform === platform) };
+}
+
+const VOD_STAGES = {
+  starting: "starting a runner",
+  probe: "reading video metadata",
+  download: "downloading the video",
+  audio: "extracting audio",
+  transcribe: "transcribing",
+  pick: "finding moments",
+  cut: "cutting clips",
+  publish: "publishing",
+  done: "done",
+  error: "error",
+};
+
+function vodVisual() {
+  const run = state.vodRun;
+  const p = state.vod && (!run || !state.vod.run_id ||
+    String(state.vod.run_id) === String(run.id)) ? state.vod : null;
+  const live = !!(run && (run.status === "in_progress" || run.status === "queued"));
+  if (live) {
+    return {
+      cls: "live",
+      label: run.status === "queued" ? "QUEUED" : "CLIPPING",
+      stage: p && p.stage ? (VOD_STAGES[p.stage] || p.stage) : "starting a runner",
+      detail: p ? p.detail || "" : "waiting for a runner",
+      percent: p ? Number(p.percent || 0) : 0,
+      title: p ? p.title || "" : "",
+      channel: p ? p.channel || "" : "",
+      clips: p ? Number(p.clips || 0) : 0,
+      lastError: "",
+    };
+  }
+  if (p && p.state === "error") {
+    return { cls: "err", label: "ERROR", stage: "error",
+      detail: p.detail || "the job failed", percent: 100,
+      title: p.title || "", channel: p.channel || "",
+      clips: Number(p.clips || 0), lastError: p.last_error || "" };
+  }
+  if (run && run.status === "completed") {
+    if (run.conclusion === "success") {
+      return { cls: "done", label: "DONE",
+        stage: "done",
+        detail: (p && p.detail) || "finished",
+        percent: 100,
+        title: (p && p.title) || "", channel: (p && p.channel) || "",
+        clips: Number((p && p.clips) || 0), lastError: "" };
+    }
+    if (run.conclusion === "cancelled") {
+      return { cls: "off", label: "CANCELLED", stage: "cancelled",
+        detail: "the job was stopped", percent: 0,
+        title: (p && p.title) || "", channel: (p && p.channel) || "",
+        clips: Number((p && p.clips) || 0), lastError: "" };
+    }
+    return { cls: "err", label: "FAILED", stage: "failed",
+      detail: "the job failed — open Actions for the log", percent: 100,
+      title: (p && p.title) || "", channel: (p && p.channel) || "",
+      clips: Number((p && p.clips) || 0),
+      lastError: (p && p.last_error) || "" };
+  }
+  if (p && p.state === "done") {
+    return { cls: "done", label: "DONE", stage: "done",
+      detail: p.detail || "finished", percent: 100,
+      title: p.title || "", channel: p.channel || "",
+      clips: Number(p.clips || 0), lastError: "" };
+  }
+  return { cls: "off", label: "READY", stage: "ready",
+    detail: p && p.state === "processing"
+      ? "the last job stopped updating — open Actions for the log"
+      : "Paste a finished YouTube video link to clip it once.",
+    percent: 0,
+    title: p ? p.title || "" : "", channel: p ? p.channel || "" : "",
+    clips: p ? Number(p.clips || 0) : 0, lastError: "" };
+}
+
+function vodPanel() {
+  const v = vodVisual();
+  const draft = state.vodDraft || "";
+  const parsed = parseVideoUrl(draft);
+  const running = v.cls === "live";
+  const canStop = running && state.vodRun && state.vodRun.id;
+  const ready = !!(parsed && !state.vodBusy);
+  const pct = Math.max(0, Math.min(100, Number(v.percent || 0)));
+  let err = state.vodError || "";
+  if (!err && draft.trim() && !parsed) err = "that's not a YouTube video link";
+  if (!err && v.cls === "err") {
+    err = v.lastError || v.detail || "the job failed — open Actions for the log";
+  }
+  const detail = v.detail || v.stage || "";
+  return `
+  <div class="nr-panel nr-panel--${v.cls}">
+    <div class="nr-head">
+      <span class="atile-ic plat-youtube">${ICONS.youtube}</span>
+      <div class="nr-titlebox">
+        <div class="nr-title">Non-realtime <span class="fleet-badge">not an agent</span></div>
+        <div class="nr-sub">One finished YouTube video: download → transcribe → pick → publish. No live monitoring.</div>
+      </div>
+      <span class="atile-state nr-state"><span class="tdot"></span>${v.label}</span>
+    </div>
+    <div class="atile-watch nr-watch">
+      <input data-vodurl type="url" spellcheck="false"
+             placeholder="https://www.youtube.com/watch?v=…"
+             value="${esc(draft)}" aria-label="YouTube video link" />
+      <button class="btn btn-primary btn-sm" data-act="clipvod"
+              ${ready ? "" : "disabled"} title="Clip this finished video once">
+        ${ICONS.play} Clip video
+      </button>
+      ${canStop ? `<button class="btn btn-danger btn-sm" data-act="stopvod"
+        title="Cancel this non-realtime job">${ICONS.stop} Stop</button>` : ""}
+    </div>
+    <div class="nr-err" data-voderr>${esc(err)}</div>
+    ${v.title ? `<div class="nr-meta" title="${esc(v.title)}">${esc(v.title)}${v.channel ? ` · ${esc(v.channel)}` : ""}</div>` : ""}
+    ${running ? `<div class="nr-bar"><span style="width:${pct}%"></span></div>` : ""}
+    <div class="nr-detail">${esc(detail)}${v.clips ? ` · ${v.clips} clip${v.clips === 1 ? "" : "s"}` : ""}</div>
+    <div class="nr-note">Runs independently — the live Start/Stop switch does not control this job.</div>
+  </div>`;
 }
 
 function agentTile(slot) {
@@ -858,6 +1010,7 @@ function renderAgents() {
       <span class="hint">each tile below is one agent · paste a live link + Watch — it monitors exactly that link, never anything automatic · no two agents ever capture the same creator (Twitch + Kick simulcasts included)</span>
       <button class="btn btn-ghost btn-sm" data-act="addagent">${ICONS.plus} Add agent</button>
     </div>
+    ${vodPanel()}
     <div class="agentgrid">${groups}${extraGroup}</div>
     <div class="footer">
       <span>Manual mode — agents only watch the links you paste. Nothing is auto-dispatched.</span>
@@ -875,6 +1028,31 @@ const URL_RESERVED = {
     "search", "video", "clips", "communities", "about", "terms", "privacy",
     "login", "signup", "tags"]),
 };
+
+/**
+ * Parse one finished YouTube video link for the Non-realtime tile.
+ * Accepts watch?v=, youtu.be, /shorts/, /live/, /embed/ and m./music.
+ * Returns { id, url } or null. Channel / playlist links are not videos.
+ */
+function parseVideoUrl(raw) {
+  let s = String(raw || "").trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  let u;
+  try { u = new URL(s); } catch { return null; }
+  let host = u.hostname.toLowerCase();
+  for (const p of ["www.", "m.", "music."]) {
+    if (host.startsWith(p)) host = host.slice(p.length);
+  }
+  if (host !== "youtube.com" && host !== "youtu.be") return null;
+  const part = u.pathname.split("/").filter(Boolean);
+  let id = "";
+  if (host === "youtu.be") id = part[0] || "";
+  else if (part[0] === "watch") id = u.searchParams.get("v") || "";
+  else if (["shorts", "live", "embed", "v"].includes(part[0])) id = part[1] || "";
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null;
+  return { id, url: `https://www.youtube.com/watch?v=${id}` };
+}
 
 /**
  * Parse any live-channel link a user may paste.
@@ -995,6 +1173,10 @@ function openPlayer(clip) {
     metaBlock("Title", clip.title, "title") +
     metaBlock("Caption", clip.caption, "caption") +
     metaBlock("Hashtags", hashtags, "hashtags");
+  const sourceLink = clip.video_url
+    ? `<div class="modal-source">Source: <a href="${esc(clip.video_url)}"
+         target="_blank" rel="noopener">${esc(clip.video_title || "YouTube video")}</a></div>`
+    : "";
   const root = $("#modal-root");
   root.innerHTML = `
   <div class="modal-back" data-act="closemodal">
@@ -1010,6 +1192,7 @@ function openPlayer(clip) {
         : `<div class="modal-novideo">No video link for this clip yet</div>`}
       <div class="modal-body">
         ${copyMeta || `<div class="modal-empty">The AI title, caption and hashtags for this clip are not available — the AI step is best-effort and may have timed out.</div>`}
+        ${sourceLink}
       </div>
       <div class="modal-foot">
         ${pillFor(clip)}
@@ -1177,6 +1360,49 @@ document.addEventListener("click", async (event) => {
   if (act === "closemodal") { closePlayer(); return; }
   if (act === "logout") { logout(); return; }
   if (act === "addagent") { await addExtraAgent(); return; }
+
+  if (act === "stopvod") {
+    if (!state.vodRun || !state.vodRun.id) return;
+    try {
+      await cancelRun(state.vodRun.id);
+      toast("Non-realtime job cancelled", "ok");
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 3000);
+    } catch (err) { toast(`Stop failed: ${err.message}`, "err"); }
+    return;
+  }
+
+  if (act === "clipvod") {
+    const parsed = parseVideoUrl(state.vodDraft || "");
+    if (!parsed) { toast("Paste a YouTube video link first", "err"); return; }
+    const replacing = !!(state.vodRun &&
+      (state.vodRun.status === "in_progress" || state.vodRun.status === "queued"));
+    const draft = state.vodDraft;
+    state.vodBusy = true;
+    state.vodError = null;
+    state.vodDraft = "";
+    state.vodRun = { id: 0, status: "queued", conclusion: null,
+      url: parsed.url, created: new Date().toISOString() };
+    state.vod = { state: "processing", stage: "starting",
+      detail: "waiting for a runner", percent: 0, run_id: "",
+      title: "", channel: "", clips: 0, last_error: "" };
+    render();
+    try {
+      await dispatchVod(parsed.url);
+      toast(replacing
+        ? "Replacing the current non-realtime job — new video queued"
+        : "Non-realtime job queued — clips will land on the board", "ok");
+      setTimeout(() => loadAgents().then(render).catch(() => {}), 5000);
+    } catch (err) {
+      state.vodError = err.message;
+      state.vodDraft = draft;
+      state.vodRun = null;
+      state.vod = null;
+      toast(`Clip video failed: ${err.message}`, "err");
+    }
+    state.vodBusy = false;
+    render();
+    return;
+  }
 
   if (act === "copy") {
     const clip = state.openClip;
@@ -1354,6 +1580,18 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  const vod = event.target.closest("[data-vodurl]");
+  if (vod) {
+    state.vodDraft = vod.value;
+    state.vodError = null;
+    const parsed = parseVideoUrl(vod.value);
+    const err = document.querySelector("[data-voderr]");
+    const btn = document.querySelector('button[data-act="clipvod"]');
+    if (err) err.textContent = vod.value.trim() && !parsed
+      ? "that's not a YouTube video link" : "";
+    if (btn) btn.disabled = !parsed || state.vodBusy;
+    return;
+  }
   const inp = event.target.closest("[data-watchurl]");
   if (!inp) return;
   const slot = inp.dataset.watchurl;
@@ -1367,6 +1605,13 @@ document.addEventListener("input", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closePlayer();
+  if (event.key === "Enter" && event.target.closest("[data-vodurl]")) {
+    const btn = document.querySelector('button[data-act="clipvod"]');
+    if (btn && !btn.disabled) {
+      event.preventDefault();
+      btn.click();
+    }
+  }
 });
 
 /* ------------------------------------------------------------------- login */
