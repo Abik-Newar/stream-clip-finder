@@ -1,3 +1,7 @@
 -r requirements.txt
 websocket-client>=1.8
 faster-whisper>=1.0
+# PyAV 19 removed the metadata_errors keyword that faster-whisper 1.2.1
+# still passes to av.open(), which breaks every transcription on a fresh
+# install (live and non-realtime). Keep PyAV on 18 until upstream fixes it.
+av<19
