@@ -4,7 +4,7 @@
   "candidates": 2,
   "channel": "jerma985",
   "chat_connected": true,
-  "chat_messages": 380,
+  "chat_messages": 510,
   "clips": 0,
   "last_ai": "keep=False score=1.0",
   "last_candidate_score": 20.13,
@@ -16,10 +16,10 @@
   "picker_score": 20.13,
   "platform": "twitch",
   "run_id": "44890607216",
-  "seconds": 294,
-  "segments": 29,
+  "seconds": 340,
+  "segments": 34,
   "slot": "twitch-1",
   "state": "watching",
   "threshold": 2.2,
-  "updated": "2026-11-21T09:45:20.819628+00:00"
+  "updated": "2026-11-21T09:46:06.751294+00:00"
 }
