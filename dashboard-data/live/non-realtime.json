@@ -1,17 +1,17 @@
 {
   "channel": "",
   "clips": 0,
-  "detail": "reading video metadata",
+  "detail": "yt-dlp failed: ERROR: [youtube] 7aEAS5E5vjg: Video unavailable. This content isn\u2019t available.",
   "dry_run": true,
   "duration": 0,
   "last_clip": "",
-  "last_error": "",
-  "percent": 2,
+  "last_error": "yt-dlp failed: ERROR: [youtube] 7aEAS5E5vjg: Video unavailable. This content isn\u2019t available.",
+  "percent": 100.0,
   "run_id": "44964541970",
   "slot": "non-realtime",
-  "stage": "probe",
-  "state": "processing",
+  "stage": "error",
+  "state": "error",
   "title": "",
-  "updated": "2026-11-22T00:01:46.544951+00:00",
+  "updated": "2026-11-22T00:02:03.814441+00:00",
   "video_id": ""
 }
