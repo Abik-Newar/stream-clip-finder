@@ -1,17 +1,17 @@
 {
   "channel": "",
   "clips": 0,
-  "detail": "reading video metadata",
+  "detail": "YouTube bot-check \u2014 refresh the YT_COOKIES repository secret with a current base64 cookies.txt and retry",
   "dry_run": true,
   "duration": 0,
   "last_clip": "",
-  "last_error": "",
-  "percent": 2,
+  "last_error": "YouTube bot-check \u2014 refresh the YT_COOKIES repository secret with a current base64 cookies.txt and retry",
+  "percent": 100.0,
   "run_id": "44964840217",
   "slot": "non-realtime",
-  "stage": "probe",
-  "state": "processing",
+  "stage": "error",
+  "state": "error",
   "title": "",
-  "updated": "2026-11-22T00:05:11.136470+00:00",
+  "updated": "2026-11-22T00:05:15.113627+00:00",
   "video_id": ""
 }
