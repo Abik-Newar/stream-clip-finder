@@ -6,7 +6,7 @@
 # logged-in browser are the only reliable fix. Twitch and Kick need none.
 #
 # Usage:
-#   ./export_yt_cookies.sh                      # read cookies from Chrome
+#   ./export_yt_cookies.sh                      # read cookies from Brave
 #   ./export_yt_cookies.sh brave                # brave / edge / firefox / safari
 #   ./export_yt_cookies.sh file cookies.txt     # use a file exported by a
 #                                               # "Get cookies.txt" extension
@@ -20,7 +20,7 @@ set -e
 cd "$(dirname "$0")"
 
 REPO="${SCF_REPO:-Abik-Newar/stream-clip-finder}"
-BROWSER="${1:-chrome}"
+BROWSER="${1:-brave}"
 OUT="$(mktemp -t yt_cookies).txt"
 
 if [ "$1" = "file" ] || [ "$1" = "--file" ]; then
