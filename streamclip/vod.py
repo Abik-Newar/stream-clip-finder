@@ -156,14 +156,18 @@ def _ytdlp(args: list[str], timeout: int = 300) -> str:
     except RuntimeError as exc:
         if "bot-check" not in str(exc):
             raise
-        log.warning("YouTube bot-check on the default client — retrying "
-                    "with the mweb client")
-        retry = [*args[:-1], "--extractor-args",
-                 "youtube:player_client=mweb", args[-1]]
-        try:
-            return _ytdlp_once(retry, timeout)
-        except RuntimeError:
-            raise exc from None
+        # Try clients with different gates. Cookies decide most of it, but
+        # these occasionally slip through when the default client is blocked.
+        for client in ("mweb", "tv", "web_safari"):
+            log.warning("YouTube bot-check on the default client — retrying "
+                        "with the %s client", client)
+            retry = [*args[:-1], "--extractor-args",
+                     f"youtube:player_client={client}", args[-1]]
+            try:
+                return _ytdlp_once(retry, timeout)
+            except RuntimeError:
+                continue
+        raise exc from None
 
 
 def probe(url: str) -> dict:

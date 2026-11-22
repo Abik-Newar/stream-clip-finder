@@ -55,6 +55,25 @@ if [ ! -s "$OUT" ] || ! grep -q "youtube.com" "$OUT"; then
   exit 1
 fi
 
+# Visitor cookies (GPS, PREF, SOCS, VISITOR_INFO1_LIVE…) do NOT satisfy
+# YouTube's bot check. A real login export contains at least one SID cookie.
+if ! awk -F'\t' '($6=="SID" || $6=="__Secure-1PSID" ||
+                 $6=="__Secure-3PSID" || $6=="LOGIN_INFO") {f=1}
+                END {exit !f}' "$OUT"; then
+  echo "✗ those cookies are not signed in (visitor cookies only)."
+  echo "  YouTube needs the HttpOnly login cookies: SID / __Secure-1PSID /"
+  echo "  __Secure-3PSID / LOGIN_INFO."
+  echo
+  echo "  1. Open Brave and sign in at https://www.youtube.com"
+  echo "  2. Export cookies from youtube.com with an extension that keeps"
+  echo "     HttpOnly cookies, e.g. 'Get cookies.txt LOCALLY'."
+  echo "  3. ./export_yt_cookies.sh file ~/Downloads/cookies.txt"
+  echo
+  echo "  A visitor-only export will be rejected by YouTube on CI."
+  rm -f "$OUT"
+  exit 1
+fi
+
 echo "✓ cookies exported ($(wc -c < "$OUT") bytes)"
 B64="$(base64 -i "$OUT" | tr -d '\n')"
 rm -f "$OUT"

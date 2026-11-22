@@ -99,6 +99,23 @@ with patch.object(vod, "_ytdlp_once", side_effect=fake_other):
 ok("a non-bot error is not retried", len(calls) == 1)
 
 
+def always_bot(args, timeout):
+    calls.append(list(args))
+    raise RuntimeError("YouTube bot-check — sign in")
+
+
+calls.clear()
+with patch.object(vod, "_ytdlp_once", side_effect=always_bot):
+    try:
+        vod._ytdlp(["https://youtu.be/x"], timeout=5)
+        ok("bot-check exhaustion raises", False)
+    except RuntimeError as exc:
+        ok("bot-check exhaustion raises", "bot-check" in str(exc))
+ok("bot-check tries every client", len(calls) == 4)
+ok("bot-check ends with web_safari",
+   any("youtube:player_client=web_safari" in c for c in calls))
+
+
 # ----------------------------------------------------------- tagged lines
 segments = [
     {"start": 0, "end": 4, "text": "So we are looking at the car.",
