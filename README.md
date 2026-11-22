@@ -212,6 +212,13 @@ dashboard: paste a YouTube video link + Clip video
   job. The tile also has a Stop button.
 - Up to `vod_max_clips` (4) clips per video, `vod_max_minutes` (90) max video
   length, and `vod_min_gap` (45 s) between picks.
+- Speed: the VOD path uses batched inference with YouTube's declared audio
+  language, so a 20-minute video transcribes in a couple of minutes instead of
+  ~25. `vod_model: auto` (default) uses the fast `base` model for Latin-script
+  languages and `small` for Hindi/Arabic/CJK; set the `VOD_MODEL` repository
+  variable (or `SCF_VOD_MODEL`) to force `tiny|base|small`. `VOD_BATCH_SIZE`
+  (default 32) trades memory for speed. Each run logs a `timings` line with
+  probe/download/audio/transcribe/pick/clip seconds.
 - YouTube may bot-check GitHub runner IPs. The job retries once with the
   `mweb` client, then stops with a clear bot-check error. If that happens,
   refresh the same `YT_COOKIES` secret used by the YouTube live agents

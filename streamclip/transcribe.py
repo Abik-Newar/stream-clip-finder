@@ -71,28 +71,88 @@ def confident(seg: dict) -> bool:
 class Transcriber:
     """Lazy-loaded faster-whisper model; safe to instantiate in a worker thread."""
 
-    def __init__(self, model_name="base", device="cpu", compute_type="int8"):
+    def __init__(self, model_name="base", device="cpu", compute_type="int8",
+                 cpu_threads=None):
         from faster_whisper import WhisperModel  # imported lazily on purpose
+        kwargs = {}
+        if cpu_threads:
+            kwargs["cpu_threads"] = max(1, int(cpu_threads))
         self._model = WhisperModel(model_name, device=device,
-                                   compute_type=compute_type)
+                                   compute_type=compute_type, **kwargs)
 
-    def transcribe(self, path, progress=None):
+    def _decode(self, path):
+        from faster_whisper.audio import decode_audio
+        return decode_audio(str(path), sampling_rate=16000)
+
+    def detect_language(self, path, sample_seconds=60, candidates=3):
+        """Pick the language by transcript confidence, not Whisper's guess.
+
+        Whisper's language ID misreads some English speech as Welsh with high
+        confidence (seen on a real VOD), which produces fluent nonsense. So we
+        take its top candidates, transcribe a mid-video sample in each, and
+        keep the one whose decode is most confident. Returns (code, detail).
+        """
+        audio = self._decode(path)
+        rate = 16000
+        if not len(audio):
+            return "", {}
+        width = max(10, int(sample_seconds)) * rate
+        # Sample from the middle: intros and outros are often music/ads.
+        start = max(0, len(audio) // 2 - width // 2)
+        sample = audio[start:start + width]
+        _, _, probs = self._model.detect_language(sample, vad_filter=True)
+        ranked = [code for code, _ in
+                  sorted(probs, key=lambda item: -item[1])][:max(1, candidates)]
+        best, best_score, detail = "", None, {}
+        for code in ranked:
+            segs, info = self._model.transcribe(
+                sample, language=code, task="transcribe", vad_filter=True,
+                condition_on_previous_text=False, beam_size=1, best_of=1,
+                temperature=0.0)
+            total = weighted = 0.0
+            for seg in segs:
+                dur = max(0.0, float(seg.end) - float(seg.start))
+                total += dur
+                weighted += dur * float(getattr(seg, "avg_logprob", -3.0) or 0)
+            score = weighted / total if total else -3.0
+            detail[code] = round(score, 3)
+            if best_score is None or score > best_score:
+                best, best_score = code, score
+        return best, detail
+
+    def transcribe(self, path, progress=None, language=None, batch_size=0,
+                   temperature=None):
         """Return [{"start", "end", "text"}] for one segment file.
 
         `progress(end_seconds, total_seconds)` is called while the generator
         yields segments. The live path ignores it; the non-realtime VOD path
         uses it to keep its dashboard heartbeat moving during long videos.
+
+        `batch_size > 0` switches to faster-whisper's batched pipeline, which
+        is several times faster on long VODs. `language` skips Whisper's
+        unreliable language guess when YouTube already told us the language;
+        `temperature=0` skips the slow retry ladder.
         """
-        segments, info = self._model.transcribe(
-            str(path),
-            # language=None → auto-detect per segment, so Hindi, Hinglish,
-            # Spanish, Arabic… all get transcribed and can be clipped.
-            language=None,
+        kwargs = dict(
+            language=language,
             task="transcribe",
             vad_filter=True,
             condition_on_previous_text=False,
             beam_size=1,
+            best_of=1,
         )
+        if temperature is not None:
+            kwargs["temperature"] = float(temperature)
+        engine = self._model
+        if batch_size and int(batch_size) > 0:
+            try:
+                from faster_whisper import BatchedInferencePipeline
+                engine = BatchedInferencePipeline(model=self._model)
+                kwargs.update(batch_size=int(batch_size),
+                              without_timestamps=False)
+            except (ImportError, TypeError):
+                engine = self._model
+        segments, info = engine.transcribe(str(path), **kwargs)
         total = float(getattr(info, "duration", 0) or 0)
         out = []
         for s in segments:

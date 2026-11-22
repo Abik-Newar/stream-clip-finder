@@ -99,6 +99,9 @@ options:
   vod_max_minutes: 90      # refuse videos longer than this
   vod_min_gap: 45          # seconds between VOD clip peaks
   vod_override_min: 7.0    # AI score floor for a VOD override (1-10)
+  vod_model: auto          # auto: base (≈3× faster) for Latin scripts, small
+                           # for Hindi/other scripts; or force tiny|base|small
+  vod_batch_size: 32       # batched inference; 0 = one segment at a time
 
   # Peak selection (v3) — used when picker is "legacy" or as fallback
   min_signals: 1         # independent signals that must agree

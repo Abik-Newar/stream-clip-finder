@@ -38,6 +38,13 @@ log = logging.getLogger("vod")
 SLOT = "non-realtime"
 VIDEO_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 YT_HOSTS = {"youtube.com", "youtu.be"}
+# Latin-script languages where the fast `base` model is good enough. Other
+# scripts (Hindi/Devanagari, Arabic, CJK…) keep `small` for accurate words.
+FAST_LANGS = {
+    "en", "es", "fr", "de", "pt", "it", "nl", "sv", "da", "nb", "no", "fi",
+    "pl", "cs", "sk", "hu", "ro", "hr", "sl", "tr", "id", "ms", "vi", "tl",
+    "sw", "af", "ca", "gl", "eu", "et", "lv", "lt",
+}
 TAG_RE = re.compile(r"\s*\[[A-Z]+[^\]]*\]")
 
 
@@ -121,6 +128,22 @@ def _ytdlp_once(args: list[str], timeout: int) -> str:
     return r.stdout
 
 
+def choose_model(want: str, lang: str) -> str:
+    """Resolve the VOD Whisper model: explicit, or auto by script."""
+    want = str(want or "auto").strip().lower()
+    if want in {"tiny", "base", "small", "medium", "large-v3"}:
+        return want
+    return "base" if (lang or "en").lower()[:2] in FAST_LANGS else "small"
+
+
+def _lang_code(value) -> str:
+    """Normalize YouTube's language metadata to a Whisper code."""
+    code = re.split(r"[-_]", str(value or "").strip().lower())[0]
+    if re.fullmatch(r"[a-z]{2,3}", code) and code != "und":
+        return code
+    return ""
+
+
 def _ytdlp(args: list[str], timeout: int = 300) -> str:
     """Run yt-dlp; retry bot-checked requests with the mweb client.
 
@@ -168,12 +191,23 @@ def probe(url: str) -> dict:
     channel = str(doc.get("uploader") or doc.get("channel") or "YouTube").strip()
     title = str(doc.get("title") or "YouTube video").strip()
     vid = str(doc.get("id") or "").strip()
+    # YouTube usually knows the audio language even when Whisper's guess
+    # would wander (it misread this English talk as Welsh). Use the declared
+    # language when present; fall back to detection when it is not.
+    lang = _lang_code(doc.get("language"))
+    if not lang:
+        for fmt in doc.get("formats") or []:
+            if isinstance(fmt, dict) and fmt.get("acodec") not in (None, "none"):
+                lang = _lang_code(fmt.get("language"))
+                if lang:
+                    break
     return {
         "id": vid if VIDEO_RE.match(vid) else "",
         "title": title,
         "channel": channel,
         "duration": duration,
         "url": str(doc.get("webpage_url") or url),
+        "language": lang,
     }
 
 
@@ -481,7 +515,19 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
     run_dir = Path("workdir") / "vod" / \
         f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    timings: dict[str, float] = {}
+
+    def log_timings() -> None:
+        log.info("non-realtime: timings probe %.1fs, download %.1fs, "
+                 "audio %.1fs, detect %.1fs, transcribe %.1fs, pick %.1fs, "
+                 "clips %.1fs",
+                 timings.get("probe", 0), timings.get("download", 0),
+                 timings.get("audio", 0), timings.get("detect", 0),
+                 timings.get("transcribe", 0), timings.get("pick", 0),
+                 timings.get("clips", 0))
+
     try:
+        t0 = time.perf_counter()
         vid, canonical = normalize_url(url)
         state.write("processing", "probe", "reading video metadata", 2)
         meta = probe(canonical)
@@ -492,42 +538,77 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
             raise RuntimeError(
                 f"video is {meta['duration'] / 60:.0f} min — the limit is "
                 f"{max_minutes} min; use a shorter video")
-        log.info("non-realtime: %s (%s, %.0fs) — %s", meta["title"],
-                 meta["channel"], meta["duration"], canonical)
+        timings["probe"] = time.perf_counter() - t0
+        log.info("non-realtime: %s (%s, %.0fs, lang=%s) — %s", meta["title"],
+                 meta["channel"], meta["duration"],
+                 meta.get("language") or "auto", canonical)
 
         state.write("processing", "download", "downloading the video", 4)
+        t0 = time.perf_counter()
         source = download(canonical, run_dir)
-        log.info("non-realtime: downloaded %s (%.1f MB)", source.name,
-                 source.stat().st_size / 1e6)
+        timings["download"] = time.perf_counter() - t0
+        log.info("non-realtime: downloaded %s (%.1f MB) in %.1fs", source.name,
+                 source.stat().st_size / 1e6, timings["download"])
 
         state.write("processing", "audio", "extracting audio", 8)
+        t0 = time.perf_counter()
         wav = run_dir / "audio.wav"
         extract_audio(source, wav)
         db = rms_db(wav)
-        log.info("non-realtime: audio ready (%d s)", len(db))
+        timings["audio"] = time.perf_counter() - t0
+        log.info("non-realtime: audio ready (%d s) in %.1fs", len(db),
+                 timings["audio"])
 
         state.write("processing", "transcribe", "transcribing", 10)
-        model = transcribe.Transcriber(opts.whisper_model)
+        threads = min(8, os.cpu_count() or 4)
+        batch = max(0, int(getattr(opts, "vod_batch_size", 0) or 0))
+        want = str(getattr(opts, "vod_model", "auto") or "auto").strip().lower()
+        lang = meta.get("language") or ""
+        detector = None
+        if not lang:
+            t0 = time.perf_counter()
+            detector = transcribe.Transcriber("base", cpu_threads=threads)
+            try:
+                lang, scores = detector.detect_language(wav)
+                timings["detect"] = time.perf_counter() - t0
+                log.info("non-realtime: detected language %s %s in %.1fs",
+                         lang or "?", scores, timings["detect"])
+            except Exception as exc:
+                lang = ""
+                log.warning("non-realtime: language detection failed: %s", exc)
+        model_name = choose_model(want, lang)
+        log.info("non-realtime: transcribe model=%s batch=%s language=%s",
+                 model_name, batch or "off", lang or "auto")
+        t0 = time.perf_counter()
+        model = detector if (detector is not None and model_name == "base") \
+            else transcribe.Transcriber(model_name, cpu_threads=threads)
 
         def on_transcribe(end: float, total: float) -> None:
             pct = 10 + (55 * min(1.0, end / total) if total else 0)
             state.write("processing", "transcribe",
                         f"transcribing {mmss(end)} / {mmss(total)}", pct)
 
-        segments = model.transcribe(wav, progress=on_transcribe)
-        log.info("non-realtime: %d transcript segments", len(segments))
+        segments = model.transcribe(wav, progress=on_transcribe,
+                                    language=lang, batch_size=batch,
+                                    temperature=0.0)
+        timings["transcribe"] = time.perf_counter() - t0
+        log.info("non-realtime: %d transcript segments in %.1fs",
+                 len(segments), timings["transcribe"])
         lines = build_lines(segments, db)
         if len(lines) < 6:
             raise RuntimeError("not enough confident speech to pick a clip")
 
         state.write("processing", "pick", "finding the best moments", 68)
+        t0 = time.perf_counter()
         max_w = float(getattr(opts, "picker_max_seconds", 32.0))
         picks = pick_moments(
             lines, title=meta["title"], channel=meta["channel"],
             max_clips=max_clips, min_gap=int(getattr(opts, "vod_min_gap", 45)),
             max_w=max_w,
             min_talk=min(14.0, float(getattr(opts, "picker_min_talk", 14.0))))
+        timings["pick"] = time.perf_counter() - t0
         if not picks:
+            log_timings()
             state.write("done", "done",
                         "no clip-worthy moment found", 100, min_gap=0)
             log.info("non-realtime: no clip-worthy moment found")
@@ -536,6 +617,7 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
                  ", ".join(f"{mmss(p['s'])}-{mmss(p['e'])} "
                            f"({p['score']:.1f})" for p in picks))
 
+        t0 = time.perf_counter()
         for i, pick in enumerate(picks):
             base = 72 + (20 * i / max(1, len(picks)))
             state.write("processing", "cut",
@@ -588,6 +670,7 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
             state.last_clip = name
             log.info("uploaded %s (%.0fs, non-realtime) → %s",
                      name, actual, dest)
+        timings["clips"] = time.perf_counter() - t0
 
         if state.clips:
             if state.dry_run:
@@ -604,6 +687,7 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
             state.write("done", "done",
                         "no clip passed the quality gate", 100, min_gap=0)
             log.info("non-realtime: no clip passed the quality gate")
+        log_timings()
         if not keep_temp:
             shutil.rmtree(run_dir, ignore_errors=True)
         return 0
@@ -611,7 +695,8 @@ def run(url: str, opts, max_clips: int = 4, max_minutes: int = 90,
         state.last_error = str(exc)
         state.write("error", "error", str(exc), 100, min_gap=0)
         log.error("non-realtime failed: %s", exc)
-        if not keep_temp:
+        log_timings()
+        if keep_temp:
             log.info("working files kept at %s", run_dir)
         return 1
 

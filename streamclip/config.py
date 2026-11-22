@@ -45,6 +45,8 @@ class Options:
     vod_max_minutes: int = 90      # refuse videos longer than this
     vod_min_gap: int = 45          # seconds between VOD clip peaks
     vod_override_min: float = 7.0  # AI score floor for a VOD override
+    vod_model: str = "auto"        # auto: base for Latin scripts, small otherwise
+    vod_batch_size: int = 32       # batched inference batch (0 = one-at-a-time)
 
     # Peak selection (v3)
     min_signals: int = 1           # independent signals that must agree
@@ -114,12 +116,15 @@ def load_config(path: str = "config/channels.yml"):
     for env, attr, cast in (
             ("SCF_VOD_MAX_CLIPS", "vod_max_clips", int),
             ("SCF_VOD_MAX_MINUTES", "vod_max_minutes", int),
-            ("SCF_VOD_MIN_GAP", "vod_min_gap", int)):
+            ("SCF_VOD_MIN_GAP", "vod_min_gap", int),
+            ("SCF_VOD_BATCH_SIZE", "vod_batch_size", int)):
         if os.environ.get(env):
             try:
                 setattr(opts, attr, cast(os.environ[env]))
             except ValueError:
                 pass
+    if os.environ.get("SCF_VOD_MODEL"):
+        opts.vod_model = os.environ["SCF_VOD_MODEL"].strip()
     if os.environ.get("SCF_THRESHOLD"):
         try:
             opts.threshold = float(os.environ["SCF_THRESHOLD"])

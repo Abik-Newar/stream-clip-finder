@@ -78,11 +78,11 @@ jobs:
           pip install -q -r requirements-capture.txt
           ~/.scf-bin/ffmpeg -version | head -1
           yt-dlp --version
-      - name: Cache Whisper model
+      - name: Cache Whisper models
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: whisper-${{ runner.os }}-${{ vars.WHISPER_MODEL || 'small' }}
+          key: whisper-v2-${{ runner.os }}-base-small
       - name: Restore rclone config
         run: |
           mkdir -p ~/.config/rclone
@@ -92,6 +92,15 @@ jobs:
           else
             echo "WARNING: GDRIVE_RCLONE_CONF not set — clips will be kept locally only"
           fi
+      - name: Cache Ollama
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ollama
+            ~/.scf-ollama
+          key: ollama-${{ runner.os }}-${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
+          restore-keys: |
+            ollama-${{ runner.os }}-
       - name: Start AI judge in background
         run: |
           cat > /tmp/ai_setup.sh <<'SH'
@@ -134,6 +143,8 @@ jobs:
           AI_BASE_URL: http://localhost:11434/v1
           AI_MODEL: ${{ vars.AI_MODEL || 'qwen2.5:3b-instruct' }}
           SCF_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
+          SCF_VOD_MODEL: ${{ vars.VOD_MODEL || 'auto' }}
+          SCF_VOD_BATCH_SIZE: ${{ vars.VOD_BATCH_SIZE || '32' }}
           YT_COOKIES: ${{ secrets.YT_COOKIES }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

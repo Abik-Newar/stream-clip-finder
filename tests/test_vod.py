@@ -56,6 +56,18 @@ for bad in (
 ok("safe_name", vod.safe_name("Kai Cenat / GTA!") == "Kai_Cenat_GTA")
 ok("mmss", vod.mmss(125) == "2:05")
 
+# ------------------------------------------------- language → model selection
+ok("lang code strips regions", vod._lang_code("en-US") == "en")
+ok("lang code accepts Hindi", vod._lang_code("hi") == "hi")
+ok("lang code ignores und", vod._lang_code("und") == "")
+ok("auto uses base for English", vod.choose_model("auto", "en") == "base")
+ok("auto uses base for Spanish", vod.choose_model("auto", "es-MX") == "base")
+ok("auto uses small for Hindi", vod.choose_model("auto", "hi") == "small")
+ok("auto uses small for Arabic", vod.choose_model("auto", "ar") == "small")
+ok("auto falls back to base", vod.choose_model("", "") == "base")
+ok("explicit model wins for Hindi", vod.choose_model("small", "hi") == "small")
+ok("explicit base wins for Hindi", vod.choose_model("base", "hi") == "base")
+
 # ------------------------------------------------------- bot-check fallback
 calls = []
 
