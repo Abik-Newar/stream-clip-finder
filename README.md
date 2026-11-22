@@ -212,8 +212,14 @@ dashboard: paste a YouTube video link + Clip video
   job. The tile also has a Stop button.
 - Up to `vod_max_clips` (4) clips per video, `vod_max_minutes` (90) max video
   length, and `vod_min_gap` (45 s) between picks.
-- YouTube may bot-check GitHub runner IPs. If the job fails with a bot-check,
-  set the same `YT_COOKIES` secret used by the YouTube live agents.
+- YouTube may bot-check GitHub runner IPs. The job retries once with the
+  `mweb` client, then stops with a clear bot-check error. If that happens,
+  refresh the same `YT_COOKIES` secret used by the YouTube live agents
+  (`./export_yt_cookies.sh`, then base64 the file). Runner IPs vary, so a
+  retry can also succeed.
+- `Video unavailable` means the video itself is private, removed,
+  region-blocked, or hidden from the `YT_COOKIES` account's restricted mode —
+  a different link (or account) is needed.
 - A link that is currently live is rejected — paste it into a YouTube live
   agent tile instead.
 
@@ -273,7 +279,7 @@ base64 -i ~/.config/rclone/rclone.conf | tr -d '\n' | pbcopy
 |---|---|---|
 | `GDRIVE_RCLONE_CONF` | yes | base64 of your rclone.conf (step 2) |
 | `OPENAI_API_KEY` | no | enables `ai_ranking` (clip confirmation + titles) |
-| `YT_COOKIES` | no | base64 of a `cookies.txt` for restricted YouTube lives |
+| `YT_COOKIES` | no | base64 of a `cookies.txt` for YouTube live capture and non-realtime downloads |
 
 ### 4. Choose channels (`config/channels.yml`)
 
