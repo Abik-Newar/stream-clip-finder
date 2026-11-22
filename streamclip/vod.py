@@ -85,16 +85,18 @@ def _cookies() -> list[str]:
     if not raw:
         return []
     try:
+        data = base64.b64decode(raw)
         path = Path.home() / ".scf_yt_cookies.txt"
-        path.write_bytes(base64.b64decode(raw))
+        path.write_bytes(data)
         path.chmod(0o600)
+        log.info("YT_COOKIES loaded (%d lines)", data.count(b"\n"))
         return ["--cookies", str(path)]
     except Exception as exc:
         log.warning("YT_COOKIES could not be decoded: %s", exc)
         return []
 
 
-def _ytdlp(args: list[str], timeout: int = 300) -> str:
+def _ytdlp_once(args: list[str], timeout: int) -> str:
     cmd = ["yt-dlp", *args]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -108,10 +110,37 @@ def _ytdlp(args: list[str], timeout: int = 300) -> str:
         low = err.lower()
         if "sign in to confirm" in low or "not a bot" in low or "bot check" in low:
             raise RuntimeError(
-                "YouTube bot-check — set the YT_COOKIES repository secret "
-                "to a base64 cookies.txt and retry")
+                "YouTube bot-check — refresh the YT_COOKIES repository "
+                "secret with a current base64 cookies.txt and retry")
+        if "video unavailable" in low:
+            raise RuntimeError(
+                "YouTube says this video is unavailable — it may be "
+                "private, removed, region-blocked, or hidden from the "
+                "YT_COOKIES account's restricted mode")
         raise RuntimeError(f"yt-dlp failed: {tail or 'unknown error'}")
     return r.stdout
+
+
+def _ytdlp(args: list[str], timeout: int = 300) -> str:
+    """Run yt-dlp; retry bot-checked requests with the mweb client.
+
+    GitHub runner IPs are frequently challenged by YouTube. The mweb client
+    is the one that has worked from Actions, so a bot-check on the default
+    client gets one honest second attempt before the job gives up.
+    """
+    try:
+        return _ytdlp_once(args, timeout)
+    except RuntimeError as exc:
+        if "bot-check" not in str(exc):
+            raise
+        log.warning("YouTube bot-check on the default client — retrying "
+                    "with the mweb client")
+        retry = [*args[:-1], "--extractor-args",
+                 "youtube:player_client=mweb", args[-1]]
+        try:
+            return _ytdlp_once(retry, timeout)
+        except RuntimeError:
+            raise exc from None
 
 
 def probe(url: str) -> dict:

@@ -56,6 +56,36 @@ for bad in (
 ok("safe_name", vod.safe_name("Kai Cenat / GTA!") == "Kai_Cenat_GTA")
 ok("mmss", vod.mmss(125) == "2:05")
 
+# ------------------------------------------------------- bot-check fallback
+calls = []
+
+
+def fake_once(args, timeout):
+    calls.append(list(args))
+    if len(calls) == 1:
+        raise RuntimeError("YouTube bot-check — sign in")
+    return "ok"
+
+
+with patch.object(vod, "_ytdlp_once", side_effect=fake_once):
+    out = vod._ytdlp(["https://youtu.be/dQw4w9WgXcQ"], timeout=5)
+ok("bot-check retries with mweb", out == "ok" and len(calls) == 2)
+ok("mweb retry keeps the URL last",
+   calls[1][-1] == "https://youtu.be/dQw4w9WgXcQ"
+   and "youtube:player_client=mweb" in calls[1])
+def fake_other(args, timeout):
+    calls.append(list(args))
+    raise RuntimeError("yt-dlp failed: nope")
+
+
+calls.clear()
+with patch.object(vod, "_ytdlp_once", side_effect=fake_other):
+    try:
+        vod._ytdlp(["https://youtu.be/x"], timeout=5)
+    except RuntimeError:
+        pass
+ok("a non-bot error is not retried", len(calls) == 1)
+
 
 # ----------------------------------------------------------- tagged lines
 segments = [
