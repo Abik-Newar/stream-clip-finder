@@ -1,17 +1,17 @@
 {
   "channel": "TED",
   "clips": 0,
-  "detail": "transcribing 13:45 / 20:03",
+  "detail": "transcribing 14:15 / 20:03",
   "dry_run": true,
   "duration": 1203.0,
   "last_clip": "",
   "last_error": "",
-  "percent": 47.7,
+  "percent": 49.1,
   "run_id": "44965274188",
   "slot": "non-realtime",
   "stage": "transcribe",
   "state": "processing",
   "title": "Do schools kill creativity? | Sir Ken Robinson | TED",
-  "updated": "2026-11-22T00:30:20.779036+00:00",
+  "updated": "2026-11-22T00:31:02.019034+00:00",
   "video_id": "iG9CE55wbtY"
 }
